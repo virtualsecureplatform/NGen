@@ -35,7 +35,7 @@ object PeStreamingNttSystemVerilog:
     val bankWidth=math.max(1,Integer.numberOfTrailingZeros(schedule.mapping.bankCount))
     val rowWidth=math.max(1,32-Integer.numberOfLeadingZeros(schedule.mapping.depth-1))
     val steps=schedule.radixLog*radix/2
-    2+2*width+2*radix*(1+bankWidth+rowWidth)+(if radix==2 then 0 else 2*width*steps)
+    2+2*width+2*radix*(1+bankWidth+rowWidth)+(if radix==2 then 0 else 2*width*(steps+radix))
 
   def emit(
       schedule: PeNttSchedule,
@@ -164,7 +164,7 @@ object PeStreamingNttSystemVerilog:
     val maxButterflySteps = radixLog * radix / 2
     val networkTemplate = schedule.bundles.flatMap(_.operations).find(_.kind == PeOperationKind.Dense).map(_.steps).getOrElse(Vector.empty)
     val bankWidth = math.max(1, Integer.numberOfTrailingZeros(mapping.bankCount))
-    val controlRecordWidth = 2 + 2 * width + 2 * radix * (1 + bankWidth + rowWidth) + (if radix == 2 then 0 else 2 * width * maxButterflySteps)
+    val controlRecordWidth = 2 + 2 * width + 2 * radix * (1 + bankWidth + rowWidth) + (if radix == 2 then 0 else 2 * width * (maxButterflySteps+radix))
 
     val peDeclarations =
       if radix == 2 then (0 until peCount).map { pe =>
@@ -173,28 +173,30 @@ object PeStreamingNttSystemVerilog:
       else (0 until peCount).map { pe =>
         val inputs = (0 until radix).map(slot => s"reg [${width - 1}:0] pe_${pe}_in_$slot;").mkString
         val constants = s"reg [1:0] pe_kind_$pe;reg [${width - 1}:0] pe_scale_c_$pe,pe_scale_p_$pe;" +
-          (0 until maxButterflySteps).map(step => s"reg [${width - 1}:0] pe_${pe}_step_c_$step,pe_${pe}_step_p_$step;").mkString
-        val layerRegisters = (for layer <- 0 until radixLog; slot <- 0 until radix yield s"reg [${width - 1}:0] pe_${pe}_layer_${layer}_$slot;").mkString +
+          (0 until maxButterflySteps).map(step => s"reg [${width - 1}:0] pe_${pe}_step_c_$step,pe_${pe}_step_p_$step;").mkString + (0 until radix).map(output=>s"reg [${width-1}:0] pe_${pe}_post_c_$output,pe_${pe}_post_p_$output;").mkString
+        val layerRegisters = (for layer <- 0 until radixLog; slot <- 0 until radix yield s"reg [${width}:0] pe_${pe}_layer_${layer}_$slot;").mkString +
           s"reg [${width - 1}:0] pe_${pe}_scale_pipe[0:${radixLog - 1}];reg [1:0] pe_${pe}_kind_pipe[0:${radixLog - 1}];reg [${radixLog - 1}:0] pe_${pe}_valid_pipe;"
         val layerProducts = (0 until radixLog).flatMap { layer =>
-          val source = if layer == 0 then Vector.tabulate(radix)(slot => s"pe_${pe}_in_$slot") else Vector.tabulate(radix)(slot => s"pe_${pe}_layer_${layer - 1}_$slot")
+          val source = if layer == 0 then Vector.tabulate(radix)(slot => s"{1'b0,pe_${pe}_in_$slot}") else Vector.tabulate(radix)(slot => s"pe_${pe}_layer_${layer - 1}_$slot")
           networkTemplate.slice(layer * radix / 2,(layer + 1) * radix / 2).zipWithIndex.map { case (step,within) =>
             val index=layer*radix/2+within
-            s"wire [${width - 1}:0] pe_${pe}_layer_product_$index=${mulCall(source(step.rightSlot),s"pe_${pe}_step_c_$index",s"pe_${pe}_step_p_$index")};"
+            s"wire [${width - 1}:0] pe_${pe}_layer_product_$index=${mulCall(s"canonical(${source(step.rightSlot)})",s"pe_${pe}_step_c_$index",s"pe_${pe}_step_p_$index")};"
           }
         }.mkString
         val layerLogic = (0 until radixLog).map { layer =>
-          val source = if layer == 0 then Vector.tabulate(radix)(slot => s"pe_${pe}_in_$slot") else Vector.tabulate(radix)(slot => s"pe_${pe}_layer_${layer - 1}_$slot")
+          val source = if layer == 0 then Vector.tabulate(radix)(slot => s"{1'b0,pe_${pe}_in_$slot}") else Vector.tabulate(radix)(slot => s"pe_${pe}_layer_${layer - 1}_$slot")
           val assignments = networkTemplate.slice(layer * radix / 2,(layer + 1) * radix / 2).zipWithIndex.flatMap { case (step,within) =>
             val index = layer * radix / 2 + within
             val product = s"pe_${pe}_layer_product_$index"
-            Vector(s"pe_${pe}_layer_${layer}_${step.leftSlot}<=mod_add(${source(step.leftSlot)},$product);",s"pe_${pe}_layer_${layer}_${step.rightSlot}<=mod_sub(${source(step.leftSlot)},$product);")
+            Vector(s"pe_${pe}_layer_${layer}_${step.leftSlot}<=lazy_add(${source(step.leftSlot)},$product);",s"pe_${pe}_layer_${layer}_${step.rightSlot}<=lazy_sub(${source(step.leftSlot)},$product);")
           }
           assignments.mkString
         }.mkString
         val pipelineLogic = s"always @(posedge clock)begin if(reset)begin pe_${pe}_valid_pipe<=0;end else begin pe_${pe}_valid_pipe[0]<=exec_active&&(exec_phase==2)&&(pe_kind_$pe!=0);pe_${pe}_kind_pipe[0]<=pe_kind_$pe;pe_${pe}_scale_pipe[0]<=${mulCall(s"pe_${pe}_in_0",s"pe_scale_c_$pe",s"pe_scale_p_$pe")};${(1 until radixLog).map(layer => s"pe_${pe}_valid_pipe[$layer]<=pe_${pe}_valid_pipe[${layer - 1}];pe_${pe}_kind_pipe[$layer]<=pe_${pe}_kind_pipe[${layer - 1}];pe_${pe}_scale_pipe[$layer]<=pe_${pe}_scale_pipe[${layer - 1}];").mkString}$layerLogic end end\n"
         val outputs = (0 until radix).map { output =>
-          s"wire [${width - 1}:0] pe_out_${pe}_$output=(pe_${pe}_kind_pipe[${radixLog - 1}]==1)?${if output == 0 then s"pe_${pe}_scale_pipe[${radixLog - 1}]" else "0"}:pe_${pe}_layer_${radixLog - 1}_$output;"
+          val raw=s"canonical(pe_${pe}_layer_${radixLog - 1}_$output)"
+          val scaled=mulCall(raw,s"pe_${pe}_post_c_$output",s"pe_${pe}_post_p_$output")
+          s"wire [${width - 1}:0] pe_out_${pe}_$output=(pe_${pe}_kind_pipe[${radixLog - 1}]==1)?${if output == 0 then s"pe_${pe}_scale_pipe[${radixLog - 1}]" else "0"}:$scaled;"
         }.mkString
         inputs + constants + layerRegisters + layerProducts + pipelineLogic + s"wire pe_fused_valid_$pe=pe_${pe}_valid_pipe[${radixLog - 1}];" + outputs
       }.mkString("\n  ")
@@ -250,6 +252,7 @@ object PeStreamingNttSystemVerilog:
       (0 until radix).flatMap(slot => Vector(ControlField(s"input_valid_$slot",1),ControlField(s"input_bank_$slot",bankWidth),ControlField(s"input_row_$slot",rowWidth))) ++
       (0 until radix).flatMap(output => Vector(ControlField(s"output_valid_$output",1),ControlField(s"output_bank_$output",bankWidth),ControlField(s"output_row_$output",rowWidth))) ++
       (if radix == 2 then Vector.empty else (0 until maxButterflySteps).flatMap(step => Vector(ControlField(s"step_constant_$step",width),ControlField(s"step_precon_$step",width))))
+      ++ (if radix == 2 then Vector.empty else (0 until radix).flatMap(output=>Vector(ControlField(s"post_constant_$output",width),ControlField(s"post_precon_$output",width))))
     val controlOffsets = controlFields.scanLeft(0)((offset,field) => offset + field.bits).dropRight(1).zip(controlFields).map { case (offset,field) => field.name -> offset }.toMap
     val controlWidth = controlFields.map(_.bits).sum
     require(controlWidth == controlRecordWidth && controlWidth == declaredControlWidth)
@@ -284,6 +287,10 @@ object PeStreamingNttSystemVerilog:
         val step = parts(2).toInt
         val twiddle = operation.flatMap(_.steps.lift(step)).map(_.twiddle).getOrElse(BigInt(0))
         if property == "constant" then encoded(twiddle) else shoup.prepare(twiddle).precondition
+      case name if name.startsWith("post_") =>
+        val parts=name.split("_");val property=parts(1);val output=parts(2).toInt
+        val factor=operation.flatMap(_.postFactors.lift(output)).getOrElse(BigInt(1))
+        if property=="constant" then encoded(factor) else shoup.prepare(factor).precondition
       case other => throw new IllegalArgumentException(s"unknown packed control field $other")
     def packedControl(operation: Option[ngen.rtl.PeOperation]): BigInt = controlFields.foldLeft(BigInt(0)) { (record,field) =>
       record | (controlValue(operation,field.name) << controlOffsets(field.name))
@@ -301,6 +308,8 @@ object PeStreamingNttSystemVerilog:
           val parts = name.split("_"); s"${prefix}output_${parts(1)}_${pe}_${parts(2)}"
         case name if name.startsWith("step_") =>
           val parts = name.split("_"); s"${prefix}step_${parts(1)}_${pe}_${parts(2)}"
+        case name if name.startsWith("post_") =>
+          val parts=name.split("_");s"${prefix}post_${parts(1)}_${pe}_${parts(2)}"
       s"$declaration $signalName=$source$range;"
     val romDeclarations = (0 until peCount).map { pe =>
       val issueAliases = controlFields.map(field => alias(pe,field,s"control_$pe","")).mkString
@@ -335,7 +344,7 @@ object PeStreamingNttSystemVerilog:
       val controls =
         if radix == 2 then Vector(s"pe_kind_$pe<=load_op_kind_$pe;pe_constant_$pe<=load_op_constant_$pe;pe_precon_$pe<=load_op_precon_$pe;")
         else Vector(s"pe_kind_$pe<=op_kind_$pe;pe_scale_c_$pe<=op_constant_$pe;pe_scale_p_$pe<=op_precon_$pe;") ++
-          (0 until maxButterflySteps).map(step => s"pe_${pe}_step_c_$step<=step_constant_${pe}_$step;pe_${pe}_step_p_$step<=step_precon_${pe}_$step;")
+          (0 until maxButterflySteps).map(step => s"pe_${pe}_step_c_$step<=step_constant_${pe}_$step;pe_${pe}_step_p_$step<=step_precon_${pe}_$step;") ++ (0 until radix).map(output=>s"pe_${pe}_post_c_$output<=post_constant_${pe}_$output;pe_${pe}_post_p_$output<=post_precon_${pe}_$output;")
       inputLoads ++ controls
     }.mkString(" ")
     val dynamicWritePorts = (for pe <- 0 until peCount; output <- 0 until radix yield
@@ -425,6 +434,9 @@ object PeStreamingNttSystemVerilog:
        |  $readyAssignment
        |  function automatic [${width - 1}:0] mod_add(input [${width - 1}:0] a,input [${width - 1}:0] b);reg [$width:0] sum,reduced;begin sum={1'b0,a}+{1'b0,b};if(sum>=MODULUS_EXT)reduced=sum-MODULUS_EXT;else reduced=sum;mod_add=reduced[${width - 1}:0];end endfunction
        |  function automatic [${width - 1}:0] mod_sub(input [${width - 1}:0] a,input [${width - 1}:0] b);reg [$width:0] difference;begin if(a>=b)difference={1'b0,a}-{1'b0,b};else difference={1'b0,a}+MODULUS_EXT-{1'b0,b};mod_sub=difference[${width - 1}:0];end endfunction
+       |  function automatic [$width:0] lazy_add(input [$width:0] a,input [${width - 1}:0] b);reg [${width + 1}:0] value,double_modulus;begin double_modulus={1'b0,MODULUS_EXT}<<1;value={1'b0,a}+b;if(value>=double_modulus)value=value-{1'b0,MODULUS_EXT};lazy_add=value[$width:0];end endfunction
+       |  function automatic [$width:0] lazy_sub(input [$width:0] a,input [${width - 1}:0] b);reg [${width + 1}:0] value,double_modulus;begin double_modulus={1'b0,MODULUS_EXT}<<1;if(a>={1'b0,b})value=a-b;else value=a+double_modulus-b;lazy_sub=value[$width:0];end endfunction
+       |  function automatic [${width - 1}:0] canonical(input [$width:0] a);reg [$width:0] value;begin value=a;if(value>=MODULUS_EXT)value=value-MODULUS_EXT;canonical=value[${width - 1}:0];end endfunction
        |  $multiplyFunction
        |  initial begin
        |    $romInitializers

@@ -7,7 +7,7 @@ final case class PeAssignment(address: Int, terms: Vector[PeTerm])
 final case class PeButterflyStep(leftSlot: Int, rightSlot: Int, twiddle: BigInt, kind: PeOperationKind)
 enum PeOperationKind:
   case Scale, DecimationInTime, GentlemanSande, Dense
-final case class PeOperation(kind: PeOperationKind, inputs: Vector[Int], outputs: Vector[PeAssignment], steps: Vector[PeButterflyStep] = Vector.empty)
+final case class PeOperation(kind: PeOperationKind, inputs: Vector[Int], outputs: Vector[PeAssignment], steps: Vector[PeButterflyStep] = Vector.empty, postFactors: Vector[BigInt] = Vector.empty)
 final case class PeBundle(stage: Int, operations: Vector[PeOperation])
 
 final case class BankMapping(bankCount: Int, addressToBank: Vector[Int], addressToRow: Vector[Int]):
@@ -36,9 +36,10 @@ final case class PeNttSchedule(
       val next = previous.clone()
       bundle.operations.foreach { operation =>
         operation.outputs.foreach { assignment =>
-          next(assignment.address) = assignment.terms.foldLeft(BigInt(0)) { (sum, term) =>
+          val value = assignment.terms.foldLeft(BigInt(0)) { (sum, term) =>
             field.add(sum, field.multiply(previous(operation.inputs(term.inputSlot)), term.coefficient))
           }
+          next(assignment.address) = field.multiply(value,operation.postFactors.lift(operation.outputs.indexOf(assignment)).getOrElse(BigInt(1)))
         }
       }
       work = next
@@ -149,6 +150,11 @@ object PeNttSchedule:
         result += PeBundle(stage, selected.toVector)
       result.toVector
 
-    val stageOperations = (if inputScale.nonEmpty then Vector(inputScale) else Vector.empty) ++ transformStages ++
-      (if outputScale.nonEmpty then Vector(outputScale) else Vector.empty)
+    val factorByAddress=plan.outputAddresses.zip(plan.outputFactors).toMap
+    val foldedTransformStages = if radixLog>1 && transformStages.nonEmpty then
+      transformStages.updated(transformStages.size-1,transformStages.last.map(operation=>operation.copy(postFactors=operation.outputs.map(output=>factorByAddress.getOrElse(output.address,BigInt(1))))))
+    else transformStages
+    val remainingOutputScale=if radixLog>1 then Vector.empty else outputScale
+    val stageOperations = (if inputScale.nonEmpty then Vector(inputScale) else Vector.empty) ++ foldedTransformStages ++
+      (if remainingOutputScale.nonEmpty then Vector(remainingOutputScale) else Vector.empty)
     PeNttSchedule(plan, radixLog, peCount, mapping, stageOperations.zipWithIndex.flatMap((operations,stage) => packStage(stage,operations)))

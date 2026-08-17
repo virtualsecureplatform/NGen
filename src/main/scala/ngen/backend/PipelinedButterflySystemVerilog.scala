@@ -14,6 +14,7 @@ object PipelinedButterflySystemVerilog:
     val radix = BigInt(1) << width
     val qInv = (-field.q.modInverse(radix)).mod(radix)
     val mu = BarrettField(field).mu
+    val bypassConstant = if reduction == ReductionKind.Montgomery then field.multiply(1,radix) else BigInt(1)
     val parameters = reduction match
       case ReductionKind.Barrett => if runtimeField then "" else s"localparam [${2 * width - 1}:0] MU=${2 * width}'d$mu;"
       case ReductionKind.Montgomery => s"localparam [${width - 1}:0] QINV=${width}'d$qInv;"
@@ -52,7 +53,7 @@ object PipelinedButterflySystemVerilog:
       case ReductionKind.Barrett =>
         s"quotient_product_temp={{$width{1'b0}},scaled_1[${4 * width - 1}:${2 * width}]}*{{${2 * width}{1'b0}},MODULUS};signed_value=$$signed({${width + 1}'d0,product_1})-$$signed({1'b0,quotient_product_temp});if(signed_value<0)signed_value=signed_value+MODULUS_REMAINDER;if(signed_value>=MODULUS_REMAINDER)signed_value=signed_value-MODULUS_REMAINDER;if(signed_value>=MODULUS_REMAINDER)signed_value=signed_value-MODULUS_REMAINDER;reduced=signed_value[${width - 1}:0];"
       case ReductionKind.Montgomery =>
-        s"multiple_temp={{$width{1'b0}},correction_product_1[${width - 1}:0]}*{{$width{1'b0}},MODULUS};wide_value={1'b0,product_1}+{1'b0,multiple_temp};montgomery_value=wide_value[${2 * width}:$width];if(montgomery_value>={1'b0,MODULUS})montgomery_value=montgomery_value-{1'b0,MODULUS};reduced=montgomery_value[${width - 1}:0];"
+        s"if(bypass_1)reduced=product_1;else begin multiple_temp={{$width{1'b0}},correction_product_1[${width - 1}:0]}*{{$width{1'b0}},MODULUS};wide_value={1'b0,product_1}+{1'b0,multiple_temp};montgomery_value=wide_value[${2 * width}:$width];if(montgomery_value>={1'b0,MODULUS})montgomery_value=montgomery_value-{1'b0,MODULUS};reduced=montgomery_value[${width - 1}:0];end"
       case ReductionKind.FermatShift => s"reduced=product_1;"
       case _ => ""
     require(!runtimeField || reduction == ReductionKind.Barrett, "runtime modulus loading currently uses the generic Barrett pipeline")
@@ -64,7 +65,7 @@ object PipelinedButterflySystemVerilog:
        |  output reg valid_out,output reg [${width - 1}:0] out0,output reg [${width - 1}:0] out1,output reg [TAG_WIDTH-1:0] tag_out$runtimePorts
        |);
        |  $fieldConstants
-       |  reg valid_0,valid_1;reg [1:0] kind_0,kind_1;reg [${width - 1}:0] a_0,b_0,a_1,b_1;reg [TAG_WIDTH-1:0] tag_0,tag_1;$stageRegisters
+       |  reg valid_0,valid_1,bypass_0,bypass_1;reg [1:0] kind_0,kind_1;reg [${width - 1}:0] a_0,b_0,a_1,b_1;reg [TAG_WIDTH-1:0] tag_0,tag_1;$stageRegisters
        |  wire [${width - 1}:0] multiply_input=(kind_in==1)?a_in:((kind_in==3)?mod_sub(b_in,a_in):b_in);
        |  reg [${2 * width}:0] wide_value;reg [${2 * width - 1}:0] multiple_temp;reg [${3 * width - 1}:0] quotient_product_temp;reg signed [${3 * width}:0] signed_value;reg [${width}:0] montgomery_value;reg [${width - 1}:0] reduced;
        |  function automatic [${width - 1}:0] mod_add(input [${width - 1}:0] a,input [${width - 1}:0] b);reg [${width}:0] v;begin v={1'b0,a}+{1'b0,b};if(v>=MODULUS_EXT)v=v-MODULUS_EXT;mod_add=v[${width - 1}:0];end endfunction
@@ -73,8 +74,8 @@ object PipelinedButterflySystemVerilog:
        |  always @(posedge clock)begin
        |    if(reset)begin valid_0<=0;valid_1<=0;valid_out<=0;out0<=0;out1<=0;tag_out<=0;end
        |    else begin
-       |      valid_0<=valid_in;kind_0<=kind_in;a_0<=a_in;b_0<=b_in;tag_0<=tag_in;$stageZero
-       |      valid_1<=valid_0;kind_1<=kind_0;a_1<=a_0;b_1<=b_0;tag_1<=tag_0;$stageOne
+       |      valid_0<=valid_in;bypass_0<=constant_in==${width}'d$bypassConstant;kind_0<=kind_in;a_0<=a_in;b_0<=b_in;tag_0<=tag_in;$stageZero
+       |      valid_1<=valid_0;bypass_1<=bypass_0;kind_1<=kind_0;a_1<=a_0;b_1<=b_0;tag_1<=tag_0;$stageOne
        |      valid_out<=valid_1;tag_out<=tag_1;$stageTwo
        |      if(kind_1==1)begin out0<=reduced;out1<=0;end
        |      else if(kind_1==2)begin out0<=mod_add(a_1,reduced);out1<=mod_sub(a_1,reduced);end

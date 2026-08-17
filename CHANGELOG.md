@@ -35,6 +35,8 @@
 - Added twiddle-one bypasses and explicit product sharing across fused layers.
 - Added writable packed operation/address/twiddle records on complete banked
   NTT cores, with record geometry in metadata.
+- Added lazy `[0,2q)` fused-radix layers and folded inverse scale/untwist into
+  final radix-4/8 output records.
 
 ## 0.1.0
 

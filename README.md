@@ -117,6 +117,10 @@ transform that stops at polynomial blocks of that size. `-r 1`, `-r 2`, and
 logarithm divides `n`. Fused radix-4/8 PEs use constant-twiddle butterfly
 networks with shared intermediate results, trading more multipliers
 for fewer memory passes.
+Their internal layer registers use lazy `[0,2q)` residues and canonicalize only
+at twiddle multipliers and external outputs. Inverse scale and negacyclic
+untwist factors are folded into final fused-output control records, avoiding a
+separate coefficient-memory pass.
 
 `-transpose indexed` preserves the v0.1 compiled-address implementation.
 `-transpose switch` uses recursive HOGE `SwitchTransposeUnit` networks for
