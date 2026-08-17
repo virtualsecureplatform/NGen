@@ -20,7 +20,8 @@ object PeStreamingNttSystemVerilog:
   def metrics(schedule: PeNttSchedule, streamingWidth: Int, profile: ProfileName): Metrics =
     val streamCycles = schedule.plan.domain.size / streamingWidth
     val gap = if profile == ProfileName.F300 then 1 else 0
-    val executionCycles = 1 + 3 * schedule.bundles.size + math.max(0, schedule.bundles.size - 1) * gap
+    val cyclesPerBundle = if schedule.radix == 2 then 6 else 3
+    val executionCycles = 1 + cyclesPerBundle * schedule.bundles.size + math.max(0, schedule.bundles.size - 1) * gap
     val latency = streamCycles + executionCycles + 2
     // Conservative two-buffer bound; capture and output overlap execution whenever a buffer is available.
     val initiationInterval = math.max(streamCycles, executionCycles)
@@ -141,7 +142,7 @@ object PeStreamingNttSystemVerilog:
 
     val peDeclarations =
       if radix == 2 then (0 until peCount).map { pe =>
-        s"reg [1:0] pe_kind_$pe;reg [${width - 1}:0] pe_a_$pe,pe_b_$pe,pe_constant_$pe,pe_precon_$pe;wire [${width - 1}:0] pe_mul_input_$pe=(pe_kind_$pe==3)?mod_sub(pe_b_$pe,pe_a_$pe):((pe_kind_$pe==1)?pe_a_$pe:pe_b_$pe);wire [${width - 1}:0] pe_product_$pe=${mulCall(s"pe_mul_input_$pe",s"pe_constant_$pe",s"pe_precon_$pe")};wire [${width - 1}:0] pe_out_${pe}_0=(pe_kind_$pe==1)?pe_product_$pe:mod_add(pe_a_$pe,(pe_kind_$pe==2)?pe_product_$pe:pe_b_$pe);wire [${width - 1}:0] pe_out_${pe}_1=(pe_kind_$pe==2)?mod_sub(pe_a_$pe,pe_product_$pe):pe_product_$pe;"
+        s"reg [1:0] pe_kind_$pe;reg [${width - 1}:0] pe_a_$pe,pe_b_$pe,pe_constant_$pe,pe_precon_$pe;wire pe_pipeline_valid_$pe,pe_pipeline_tag_$pe;wire [${width - 1}:0] pe_out_${pe}_0,pe_out_${pe}_1;wire pe_pipeline_launch_$pe=exec_active&&(exec_phase==2)&&(pe_kind_$pe!=0);NGenInternalPipelinedButterfly #(.TAG_WIDTH(1)) pe_pipeline_$pe(clock,reset,pe_pipeline_launch_$pe,pe_kind_$pe,pe_a_$pe,pe_b_$pe,pe_constant_$pe,pe_precon_$pe,1'b0,pe_pipeline_valid_$pe,pe_out_${pe}_0,pe_out_${pe}_1,pe_pipeline_tag_$pe);"
       }.mkString("\n  ")
       else (0 until peCount).map { pe =>
         val inputs = (0 until radix).map(slot => s"reg [${width - 1}:0] pe_${pe}_in_$slot;").mkString
@@ -302,6 +303,10 @@ object PeStreamingNttSystemVerilog:
       s"if(output_valid_${pe}_${output})begin ${bankCase(s"output_bank_${pe}_${output}") { bank =>
         s"if(exec_buffer)begin ${portName(1,bank,"write_enable")}=1;${portName(1,bank,"write_address")}=output_row_${pe}_${output};${portName(1,bank,"write_data")}=pe_out_${pe}_$output;end else begin ${portName(0,bank,"write_enable")}=1;${portName(0,bank,"write_address")}=output_row_${pe}_${output};${portName(0,bank,"write_data")}=pe_out_${pe}_$output;end"
       }} end").mkString(" ")
+    val pipelineDefinition = if radix == 2 then PipelinedButterflySystemVerilog.emit(field,reduction,"NGenInternalPipelinedButterfly") else ""
+    val pipelineRetire = if radix == 2 then "pe_pipeline_valid_0" else "1'b1"
+    val writePhase = if radix == 2 then 3 else 2
+    val pipelineLaunchTransition = if radix == 2 then "else if(exec_phase==2)exec_phase<=3;" else ""
 
     val resetOutputs = Vector.tabulate(streamingWidth)(lane => s"o$lane<=0;").mkString
     val emptyBufferReady = "(buffer_0_state==EMPTY)||(buffer_1_state==EMPTY)"
@@ -326,6 +331,7 @@ object PeStreamingNttSystemVerilog:
        |/* verilator lint_off WIDTHEXPAND */
        |/* verilator lint_off WIDTHTRUNC */
        |/* verilator lint_off UNUSEDSIGNAL */
+       |$pipelineDefinition
        |module $top(
        |${ports.map("  "+_).mkString(",\n")}
        |);
@@ -351,7 +357,7 @@ object PeStreamingNttSystemVerilog:
        |    end else if($continuingInputAccepted)begin case(capture_count)$captureCases default:begin end endcase end
        |    if(exec_active&&gap_count==0)begin
        |      if(exec_phase==0)begin $dynamicReadPorts end
-       |      else if(exec_phase==2)begin $dynamicWritePorts end
+       |      else if(exec_phase==$writePhase&&$pipelineRetire)begin $dynamicWritePorts end
        |    end
        |    if(output_active)begin
        |      if(!output_prefetched)begin case(output_count)$outputCurrentReadCases default:begin end endcase end
@@ -379,7 +385,8 @@ object PeStreamingNttSystemVerilog:
        |      end else if(gap_count!=0)gap_count<=gap_count-1;
        |      else if(exec_phase==0)exec_phase<=1;
        |      else if(exec_phase==1)begin $dynamicLoads exec_phase<=2;end
-       |      else begin
+       |      $pipelineLaunchTransition
+       |      else if($pipelineRetire)begin
        |        exec_phase<=0;
        |        if(bundle_index==BUNDLE_COUNT-1)begin exec_active<=0;bundle_index<=0;if(exec_buffer)buffer_1_state<=DONE;else buffer_0_state<=DONE;end
        |        else begin bundle_index<=bundle_index+1;gap_count<=BUNDLE_GAP;end

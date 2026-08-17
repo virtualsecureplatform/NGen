@@ -10,6 +10,7 @@ import ngen.backend.KyberSystemVerilog
 import ngen.backend.SwitchTransposeSystemVerilog
 import ngen.backend.PeStreamingNttSystemVerilog
 import ngen.backend.GenericSwitchTransposeWrapper
+import ngen.backend.PipelinedButterflySystemVerilog
 import ngen.rtl.SwitchTransposeSpec
 import ngen.rtl.{Architecture, ArchitectureKind, GenericNttGraph, PeNttSchedule, PipelineProfile, Port, PortDirection, ReductionChoice, ReductionKind, StreamProtocol, StreamingContract, ValueFormat}
 import ngen.transform.{DataOrder, IncompleteNttPlan, NttPlan, StreamingNttPlan, SwitchBoundaryPlan}
@@ -247,6 +248,16 @@ object Main:
           Option(output.getParent).foreach(Files.createDirectories(_))
           Files.writeString(output, SwitchTransposeSystemVerilog.emit(SwitchTransposeSpec(logSize, dataWidth), topName.getOrElse("SwitchTransposeTop")))
           println(s"Written switch transpose in $output.")
+        case Command.ButterflyPipeline(modulus, reduction, outputName, topName) =>
+          val output = Path.of(outputName.getOrElse("butterfly-pipeline.sv"))
+          Option(output.getParent).foreach(Files.createDirectories(_))
+          val kind = reduction match
+            case ReductionChoice.Barrett => ReductionKind.Barrett
+            case ReductionChoice.Montgomery => ReductionKind.Montgomery
+            case ReductionChoice.Shoup => ReductionKind.Shoup
+            case _ => throw new IllegalArgumentException("butterfly pipeline reduction must be explicit")
+          Files.writeString(output, PipelinedButterflySystemVerilog.emit(modulus, kind, topName.getOrElse("NGenPipelinedButterfly")))
+          println(s"Written pipelined butterfly in $output.")
         case Command.Generate(config) =>
           printPlan(config)
           if config.check then check(config)

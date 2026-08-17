@@ -76,6 +76,19 @@ one buffer while the next transform executes. The default PE count is
 `max(1, K/2)`. Multipliers therefore scale with PE count rather than with the
 number of scheduled butterflies.
 
+Radix-2 PEs use a three-stage tagged arithmetic pipeline for Barrett,
+Montgomery, or Shoup multiplication. The same pipeline can be emitted as a
+standalone one-operation-per-cycle component with:
+
+```bash
+./ngen.bat -q 12289 -reduction shoup -o butterfly-pipeline.sv butterflypipeline
+```
+
+The current transform controller waits for each radix-2 result before issuing
+the next bundle; stage-barrier-aware multi-bundle issue is the remaining step
+needed to realize one transform bundle per cycle. Radix-4/8 networks are still
+registered only at their external PE boundary.
+
 `-protocol ready-valid` replaces the transaction-start interface with
 per-chunk `in_valid/in_ready` and `out_valid/out_ready` handshakes. Input
 capture and output draining may stall independently; output data and
@@ -138,6 +151,8 @@ couple NGen to the LLM candidate-selection runner.
   negacyclic, and incomplete NTT/INTT designs across multiple `K`, stream
   orders, pipeline profiles, Barrett/Montgomery/Shoup reductions, and an overlapped
   back-to-back transaction.
+- `scripts/test_pipelined_butterfly.py` drives consecutive tagged operations
+  through all three modular-reduction pipelines.
 
 The transform library also contains reference-checked composition groundwork
 for complete-transform RNS polynomial multiplication with CRT reconstruction,

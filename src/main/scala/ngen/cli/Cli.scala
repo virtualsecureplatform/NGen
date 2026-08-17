@@ -39,6 +39,7 @@ final case class GeneratorConfig(
 enum Command:
   case Generate(config: GeneratorConfig)
   case SwitchTranspose(logSize: Int, dataWidth: Int, output: Option[String], top: Option[String])
+  case ButterflyPipeline(modulus: Modulus, reduction: ReductionChoice, output: Option[String], top: Option[String])
   case Presets
   case Version
   case Help
@@ -82,6 +83,7 @@ object Cli:
       |  raintt          Combined YATA forward/inverse benchmark wrapper.
       |  kyberpe         Combined Kyber PE1 forward/inverse wrapper.
       |  switchtranspose Generate a HOGE-style recursive switch transpose.
+      |  butterflypipeline Generate a tagged three-stage modular butterfly pipeline.
       |  presets         List built-in field/domain presets.
       |  version         Print the NGen version.
       |
@@ -154,7 +156,7 @@ object Cli:
         case "-check" => check = true
         case "-nologo" => ()
         case "-h" | "--help" | "help" => terminal = Some("help")
-        case value @ ("ntt" | "intt" | "raintt" | "kyberpe" | "switchtranspose" | "presets" | "version") =>
+        case value @ ("ntt" | "intt" | "raintt" | "kyberpe" | "switchtranspose" | "butterflypipeline" | "presets" | "version") =>
           require(terminal.isEmpty, s"multiple transforms specified: ${terminal.get} and $value")
           terminal = Some(value)
         case unknown => throw new IllegalArgumentException(s"unknown argument: $unknown")
@@ -169,6 +171,11 @@ object Cli:
         require(logSize > 0 && logSize < 16)
         require(dataWidth > 0)
         Command.SwitchTranspose(logSize, dataWidth, output, top)
+      case Some("butterflypipeline") =>
+        require(preset.isEmpty && n.isEmpty && root.isEmpty && psi.isEmpty && baseCase.isEmpty && peCount.isEmpty,
+          "butterflypipeline uses -q and -reduction")
+        require(reduction != ReductionChoice.Auto, "butterflypipeline requires -reduction barrett, montgomery, or shoup")
+        Command.ButterflyPipeline(Modulus(q.getOrElse(throw new IllegalArgumentException("butterflypipeline requires -q"))), reduction, output, top)
       case Some(transform @ ("ntt" | "intt" | "raintt" | "kyberpe")) =>
         val selected = preset match
           case Some(name) =>

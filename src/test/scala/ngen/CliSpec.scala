@@ -95,3 +95,12 @@ class CliSpec extends AnyFunSuite:
     command match
       case Command.Generate(config) => assert(config.protocol == StreamProtocol.ReadyValid)
       case other => fail(s"expected generation command, got $other")
+
+  test("pipelined butterfly command requires an explicit reduction"):
+    val command = Cli.parse(Seq("-q", "12289", "-reduction", "shoup", "-o", "pipe.sv", "butterflypipeline"))
+    command match
+      case Command.ButterflyPipeline(modulus, reduction, output, _) =>
+        assert(modulus.q == 12289)
+        assert(reduction == ReductionChoice.Shoup)
+        assert(output.contains("pipe.sv"))
+      case other => fail(s"expected butterfly pipeline command, got $other")

@@ -19,6 +19,8 @@
 - Added RNS polynomial-multiplication/CRT and general-size mixed-radix or
   Bluestein planning oracles.
 - Integrated physical switch-transpose boundaries into square custom streams.
+- Added tagged three-stage Barrett, Montgomery, and Shoup radix-2 butterfly
+  pipelines and integrated them into the banked radix-2 PE backend.
 
 ## 0.1.0
 

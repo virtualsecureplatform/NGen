@@ -31,8 +31,8 @@ class PeStreamingNttSystemVerilogSpec extends AnyFunSuite:
     val radix2 = PeNttSchedule.build(NttPlan.radix2(domain, inverse = false), 1, 2, 4)
     val radix2Metrics = PeStreamingNttSystemVerilog.metrics(radix2, 4, ProfileName.Baseline)
     assert(radix2Metrics.bundleCount == 16)
-    assert(radix2Metrics.executionCycles == 49)
-    assert(radix2Metrics.latency == 55)
+    assert(radix2Metrics.executionCycles == 97)
+    assert(radix2Metrics.latency == 103)
     val radix4 = PeNttSchedule.build(NttPlan.radix2(domain, inverse = false), 2, 1, 4)
     assert(PeStreamingNttSystemVerilog.metrics(radix4, 4, ProfileName.Baseline).latency == 31)
 
