@@ -5,6 +5,7 @@ import ngen.cli.{Cli, Command, Direction, GeneratorConfig}
 import ngen.transform.ReferenceNtt
 import ngen.backend.YataStreamingSystemVerilog
 import ngen.backend.{DesignMetadata, GraphSystemVerilog, TransformDot}
+import ngen.backend.HogeSystemVerilog
 import ngen.rtl.{Architecture, GenericNttGraph, PipelineProfile, Port, PortDirection, ReductionKind, StreamingContract, ValueFormat}
 
 import java.nio.file.{Files, Path}
@@ -43,6 +44,23 @@ object Main:
         case _ => "YataRainttTop"
       val top = config.top.getOrElse(defaultTop)
       Files.writeString(output, YataStreamingSystemVerilog.emit(config.domain.logSize, config.streamingLog, top))
+      println(s"Written design in $output.")
+      true
+    else if config.domain.name == "hoge32" then
+      require(config.streamingLog == 5 && config.radixLog == 5, "hoge32 requires -k 5 -r 5")
+      val output = Path.of(config.output.getOrElse("design.sv"))
+      Option(output.getParent).foreach(Files.createDirectories(_))
+      Files.writeString(output, HogeSystemVerilog.emitRadix32(config.top.getOrElse("SmallHoge32P64Rtl")))
+      println(s"Written design in $output.")
+      true
+    else if config.domain.name == "hoge1024" then
+      require(config.streamingLog == 5 && config.radixLog == 5, "hoge1024 requires -k 5 -r 5")
+      val output = Path.of(config.output.getOrElse("design.v"))
+      Option(output.getParent).foreach(Files.createDirectories(_))
+      val inverse = config.direction == Direction.Inverse
+      val top = config.top.getOrElse(if inverse then "INTTWrap" else "NTTWrap")
+      val rtl = if inverse then HogeSystemVerilog.emitStreamingIntt(top) else HogeSystemVerilog.emitStreamingNtt(top)
+      Files.writeString(output, rtl)
       println(s"Written design in $output.")
       true
     else if config.domain.name == "custom" then
