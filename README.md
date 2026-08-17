@@ -87,6 +87,11 @@ standalone one-operation-per-cycle component with:
 ./ngen.bat -q 12289 -reduction shoup -o butterfly-pipeline.sv butterflypipeline
 ```
 
+`butterflypipeline -runtime-field` exposes runtime Barrett modulus and
+reciprocal inputs; twiddle and precondition values are already supplied per
+operation. The field inputs must remain stable until all tagged operations
+drain.
+
 The radix-2 transform controller issues one independent bundle per cycle,
 tracks multiple tagged results in flight, permits simultaneous bank reads and
 older-result writes, and drains the arithmetic pipeline only at transform-stage

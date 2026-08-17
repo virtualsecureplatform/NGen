@@ -8,14 +8,14 @@ import ngen.rtl.ReductionKind
 object PipelinedButterflySystemVerilog:
   val Latency = 3
 
-  def emit(field: Modulus, reduction: ReductionKind, top: String = "NGenPipelinedButterfly"): String =
+  def emit(field: Modulus, reduction: ReductionKind, top: String = "NGenPipelinedButterfly", runtimeField: Boolean = false): String =
     require(Set(ReductionKind.Barrett, ReductionKind.Montgomery, ReductionKind.Shoup, ReductionKind.FermatShift)(reduction))
     val width = field.bitWidth
     val radix = BigInt(1) << width
     val qInv = (-field.q.modInverse(radix)).mod(radix)
     val mu = BarrettField(field).mu
     val parameters = reduction match
-      case ReductionKind.Barrett => s"localparam [${2 * width - 1}:0] MU=${2 * width}'d$mu;"
+      case ReductionKind.Barrett => if runtimeField then "" else s"localparam [${2 * width - 1}:0] MU=${2 * width}'d$mu;"
       case ReductionKind.Montgomery => s"localparam [${width - 1}:0] QINV=${width}'d$qInv;"
       case ReductionKind.Shoup => ""
       case ReductionKind.FermatShift => s"localparam integer FERMAT_PERIOD=${2 * (width - 1)};"
@@ -31,9 +31,10 @@ object PipelinedButterflySystemVerilog:
       case _ => ""
     val stageZero = reduction match
       case ReductionKind.Shoup =>
-        s"product_0<={{$width{1'b0}},multiply_input}*{{$width{1'b0}},constant_in};approximate_0<={{$width{1'b0}},multiply_input}*{{$width{1'b0}},precon_in};"
+        s"if(constant_in==${width}'d1)begin product_0<=multiply_input;approximate_0<=0;end else begin product_0<={{$width{1'b0}},multiply_input}*{{$width{1'b0}},constant_in};approximate_0<={{$width{1'b0}},multiply_input}*{{$width{1'b0}},precon_in};end"
       case ReductionKind.Barrett | ReductionKind.Montgomery =>
-        s"product_0<={{$width{1'b0}},multiply_input}*{{$width{1'b0}},constant_in};"
+        val bypass=if reduction==ReductionKind.Montgomery then field.multiply(1,radix) else BigInt(1)
+        s"if(constant_in==${width}'d$bypass)product_0<=multiply_input;else product_0<={{$width{1'b0}},multiply_input}*{{$width{1'b0}},constant_in};"
       case ReductionKind.FermatShift => s"product_0<=fermat_mul(multiply_input,constant_in);"
       case _ => ""
     val stageOne = reduction match
@@ -54,12 +55,15 @@ object PipelinedButterflySystemVerilog:
         s"multiple_temp={{$width{1'b0}},correction_product_1[${width - 1}:0]}*{{$width{1'b0}},MODULUS};wide_value={1'b0,product_1}+{1'b0,multiple_temp};montgomery_value=wide_value[${2 * width}:$width];if(montgomery_value>={1'b0,MODULUS})montgomery_value=montgomery_value-{1'b0,MODULUS};reduced=montgomery_value[${width - 1}:0];"
       case ReductionKind.FermatShift => s"reduced=product_1;"
       case _ => ""
+    require(!runtimeField || reduction == ReductionKind.Barrett, "runtime modulus loading currently uses the generic Barrett pipeline")
+    val runtimePorts=if runtimeField then s",input [${width-1}:0] modulus_in,input [${2*width-1}:0] reduction_constant_in" else ""
+    val fieldConstants=if runtimeField then s"wire [${width-1}:0] MODULUS=modulus_in;wire [${width}:0] MODULUS_EXT={1'b0,modulus_in};wire signed [${3*width}:0] MODULUS_REMAINDER=$$signed({${2*width+1}'d0,modulus_in});wire [${2*width-1}:0] MU=reduction_constant_in;" else s"localparam [${width-1}:0] MODULUS=${width}'d${field.q};localparam [${width}:0] MODULUS_EXT=${width+1}'d${field.q};localparam signed [${3*width}:0] MODULUS_REMAINDER=${3*width+1}'sd${field.q};$parameters"
     s"""module $top #(parameter TAG_WIDTH=1)(
        |  input clock,input reset,input valid_in,input [1:0] kind_in,
        |  input [${width - 1}:0] a_in,input [${width - 1}:0] b_in,input [${width - 1}:0] constant_in,input [${width - 1}:0] precon_in,input [TAG_WIDTH-1:0] tag_in,
-       |  output reg valid_out,output reg [${width - 1}:0] out0,output reg [${width - 1}:0] out1,output reg [TAG_WIDTH-1:0] tag_out
+       |  output reg valid_out,output reg [${width - 1}:0] out0,output reg [${width - 1}:0] out1,output reg [TAG_WIDTH-1:0] tag_out$runtimePorts
        |);
-       |  localparam [${width - 1}:0] MODULUS=${width}'d${field.q};localparam [${width}:0] MODULUS_EXT=${width + 1}'d${field.q};localparam signed [${3 * width}:0] MODULUS_REMAINDER=${3 * width + 1}'sd${field.q};$parameters
+       |  $fieldConstants
        |  reg valid_0,valid_1;reg [1:0] kind_0,kind_1;reg [${width - 1}:0] a_0,b_0,a_1,b_1;reg [TAG_WIDTH-1:0] tag_0,tag_1;$stageRegisters
        |  wire [${width - 1}:0] multiply_input=(kind_in==1)?a_in:((kind_in==3)?mod_sub(b_in,a_in):b_in);
        |  reg [${2 * width}:0] wide_value;reg [${2 * width - 1}:0] multiple_temp;reg [${3 * width - 1}:0] quotient_product_temp;reg signed [${3 * width}:0] signed_value;reg [${width}:0] montgomery_value;reg [${width - 1}:0] reduced;

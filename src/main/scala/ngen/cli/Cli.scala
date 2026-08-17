@@ -40,7 +40,7 @@ final case class GeneratorConfig(
 enum Command:
   case Generate(config: GeneratorConfig)
   case SwitchTranspose(logSize: Int, dataWidth: Int, output: Option[String], top: Option[String])
-  case ButterflyPipeline(modulus: Modulus, reduction: ReductionChoice, output: Option[String], top: Option[String])
+  case ButterflyPipeline(modulus: Modulus, reduction: ReductionChoice, runtimeField: Boolean, output: Option[String], top: Option[String])
   case RnsPolynomial(basis: RnsBasis, emitCrt: Boolean, output: Option[String], top: Option[String])
   case GeneralNtt(plan: GeneralNttPlan, output: Option[String], top: Option[String])
   case Presets
@@ -84,6 +84,7 @@ object Cli:
       |  -input-order <o> Input stream order: natural (default) or bitreversed.
       |  -output-order <o> Output stream order: natural (default) or bitreversed.
       |  -protocol <p>   Stream control: next (default) or ready-valid.
+      |  -runtime-field  Expose runtime modulus/reduction-constant ports on butterflypipeline.
       |  -graph          Emit the transform-decomposition DOT graph.
       |  -rtlgraph       Emit the scheduled RTL DOT graph.
       |  -check          Run the mathematical round-trip check before generation.
@@ -149,6 +150,7 @@ object Cli:
     var inputOrder = DataOrder.Natural
     var outputOrder = DataOrder.Natural
     var protocol = StreamProtocol.NextPulse
+    var runtimeField = false
     var graph = false
     var rtlGraph = false
     var terminal: Option[String] = None
@@ -183,6 +185,7 @@ object Cli:
         case "-input-order" => inputOrder = DataOrder.parse(requiredValue(args, "-input-order"))
         case "-output-order" => outputOrder = DataOrder.parse(requiredValue(args, "-output-order"))
         case "-protocol" => protocol = StreamProtocol.parse(requiredValue(args, "-protocol"))
+        case "-runtime-field" => runtimeField = true
         case "-graph" => graph = true
         case "-rtlgraph" => rtlGraph = true
         case "-check" => check = true
@@ -207,7 +210,7 @@ object Cli:
         require(preset.isEmpty && n.isEmpty && root.isEmpty && psi.isEmpty && baseCase.isEmpty && peCount.isEmpty,
           "butterflypipeline uses -q and -reduction")
         require(reduction != ReductionChoice.Auto, "butterflypipeline requires -reduction barrett, montgomery, or shoup")
-        Command.ButterflyPipeline(Modulus(q.getOrElse(throw new IllegalArgumentException("butterflypipeline requires -q"))), reduction, output, top)
+        Command.ButterflyPipeline(Modulus(q.getOrElse(throw new IllegalArgumentException("butterflypipeline requires -q"))), reduction, runtimeField, output, top)
       case Some("rnspolymul") =>
         val logSize = n.getOrElse(throw new IllegalArgumentException("rnspolymul requires -n"))
         val moduli = rnsModuli.getOrElse(throw new IllegalArgumentException("rnspolymul requires -rns-q"))

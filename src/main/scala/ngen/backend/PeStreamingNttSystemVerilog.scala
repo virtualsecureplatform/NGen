@@ -67,7 +67,8 @@ object PeStreamingNttSystemVerilog:
     def literal(value: BigInt): String = s"${width}'d${encoded(value)}"
     def precondition(value: BigInt): String = s"${width}'d${shoup.prepare(value).precondition}"
     def mulCall(value: String, constant: String, precon: String): String =
-      if reduction == ReductionKind.Shoup then s"field_mul($value,$constant,$precon)" else s"field_mul($value,$constant)"
+      val product=if reduction == ReductionKind.Shoup then s"field_mul($value,$constant,$precon)" else s"field_mul($value,$constant)"
+      s"(($constant==${literal(1)})?$value:$product)"
 
     val reductionParameter = reduction match
       case ReductionKind.Barrett => s"localparam [${2 * width - 1}:0] BARRETT_MU=${2 * width}'d${barrett.mu};"
@@ -165,11 +166,18 @@ object PeStreamingNttSystemVerilog:
           (0 until maxButterflySteps).map(step => s"reg [${width - 1}:0] pe_${pe}_step_c_$step,pe_${pe}_step_p_$step;").mkString
         val layerRegisters = (for layer <- 0 until radixLog; slot <- 0 until radix yield s"reg [${width - 1}:0] pe_${pe}_layer_${layer}_$slot;").mkString +
           s"reg [${width - 1}:0] pe_${pe}_scale_pipe[0:${radixLog - 1}];reg [1:0] pe_${pe}_kind_pipe[0:${radixLog - 1}];reg [${radixLog - 1}:0] pe_${pe}_valid_pipe;"
+        val layerProducts = (0 until radixLog).flatMap { layer =>
+          val source = if layer == 0 then Vector.tabulate(radix)(slot => s"pe_${pe}_in_$slot") else Vector.tabulate(radix)(slot => s"pe_${pe}_layer_${layer - 1}_$slot")
+          networkTemplate.slice(layer * radix / 2,(layer + 1) * radix / 2).zipWithIndex.map { case (step,within) =>
+            val index=layer*radix/2+within
+            s"wire [${width - 1}:0] pe_${pe}_layer_product_$index=${mulCall(source(step.rightSlot),s"pe_${pe}_step_c_$index",s"pe_${pe}_step_p_$index")};"
+          }
+        }.mkString
         val layerLogic = (0 until radixLog).map { layer =>
           val source = if layer == 0 then Vector.tabulate(radix)(slot => s"pe_${pe}_in_$slot") else Vector.tabulate(radix)(slot => s"pe_${pe}_layer_${layer - 1}_$slot")
           val assignments = networkTemplate.slice(layer * radix / 2,(layer + 1) * radix / 2).zipWithIndex.flatMap { case (step,within) =>
             val index = layer * radix / 2 + within
-            val product = mulCall(source(step.rightSlot),s"pe_${pe}_step_c_$index",s"pe_${pe}_step_p_$index")
+            val product = s"pe_${pe}_layer_product_$index"
             Vector(s"pe_${pe}_layer_${layer}_${step.leftSlot}<=mod_add(${source(step.leftSlot)},$product);",s"pe_${pe}_layer_${layer}_${step.rightSlot}<=mod_sub(${source(step.leftSlot)},$product);")
           }
           assignments.mkString
@@ -178,7 +186,7 @@ object PeStreamingNttSystemVerilog:
         val outputs = (0 until radix).map { output =>
           s"wire [${width - 1}:0] pe_out_${pe}_$output=(pe_${pe}_kind_pipe[${radixLog - 1}]==1)?${if output == 0 then s"pe_${pe}_scale_pipe[${radixLog - 1}]" else "0"}:pe_${pe}_layer_${radixLog - 1}_$output;"
         }.mkString
-        inputs + constants + layerRegisters + pipelineLogic + s"wire pe_fused_valid_$pe=pe_${pe}_valid_pipe[${radixLog - 1}];" + outputs
+        inputs + constants + layerRegisters + layerProducts + pipelineLogic + s"wire pe_fused_valid_$pe=pe_${pe}_valid_pipe[${radixLog - 1}];" + outputs
       }.mkString("\n  ")
 
     def operationConstant(operation: ngen.rtl.PeOperation): BigInt = operation.kind match

@@ -30,6 +30,9 @@
   optional CRT reconstruction outputs.
 - Added generated recursive mixed-radix and padded Bluestein RTL for
   non-power-of-two transform sizes.
+- Added runtime-loaded Barrett modulus/reciprocal ports and per-operation
+  twiddle inputs on the tagged butterfly pipeline.
+- Added twiddle-one bypasses and explicit product sharing across fused layers.
 
 ## 0.1.0
 

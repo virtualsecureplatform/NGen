@@ -99,7 +99,7 @@ class CliSpec extends AnyFunSuite:
   test("pipelined butterfly command requires an explicit reduction"):
     val command = Cli.parse(Seq("-q", "12289", "-reduction", "shoup", "-o", "pipe.sv", "butterflypipeline"))
     command match
-      case Command.ButterflyPipeline(modulus, reduction, output, _) =>
+      case Command.ButterflyPipeline(modulus, reduction, _, output, _) =>
         assert(modulus.q == 12289)
         assert(reduction == ReductionChoice.Shoup)
         assert(output.contains("pipe.sv"))

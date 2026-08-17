@@ -255,7 +255,7 @@ object Main:
           Option(output.getParent).foreach(Files.createDirectories(_))
           Files.writeString(output, SwitchTransposeSystemVerilog.emit(SwitchTransposeSpec(logSize, dataWidth), topName.getOrElse("SwitchTransposeTop")))
           println(s"Written switch transpose in $output.")
-        case Command.ButterflyPipeline(modulus, reduction, outputName, topName) =>
+        case Command.ButterflyPipeline(modulus, reduction, runtimeField, outputName, topName) =>
           val output = Path.of(outputName.getOrElse("butterfly-pipeline.sv"))
           Option(output.getParent).foreach(Files.createDirectories(_))
           val kind = reduction match
@@ -264,7 +264,7 @@ object Main:
             case ReductionChoice.Shoup => ReductionKind.Shoup
             case ReductionChoice.FermatShift => ReductionKind.FermatShift
             case _ => throw new IllegalArgumentException("butterfly pipeline reduction must be explicit")
-          Files.writeString(output, PipelinedButterflySystemVerilog.emit(modulus, kind, topName.getOrElse("NGenPipelinedButterfly")))
+          Files.writeString(output, PipelinedButterflySystemVerilog.emit(modulus, kind, topName.getOrElse("NGenPipelinedButterfly"),runtimeField))
           println(s"Written pipelined butterfly in $output.")
         case Command.RnsPolynomial(basis, emitCrt, outputName, topName) =>
           val output = Path.of(outputName.getOrElse("rns-polymul.sv"))
