@@ -1,11 +1,12 @@
 package ngen
 
-import ngen.backend.YataStreamingSystemVerilog
+import ngen.backend.YataMicrocodedSystemVerilog
+import ngen.rtl.ProfileName
 import org.scalatest.funsuite.AnyFunSuite
 
 class YataSystemVerilogSpec extends AnyFunSuite:
   test("radix-8 backend emits the requested benchmark top"):
-    val rtl = YataStreamingSystemVerilog.emit(3, 3, "CandidateTop")
+    val rtl = YataMicrocodedSystemVerilog.emit(3, 3, ProfileName.Baseline, "CandidateTop")
     assert(rtl.contains("module CandidateTop("))
     assert(rtl.contains("input [31:0] io_intt_in_7"))
     assert(rtl.contains("output reg [31:0] io_ntt_out_7"))
@@ -14,13 +15,13 @@ class YataSystemVerilogSpec extends AnyFunSuite:
     assert(!rtl.contains(" % "))
 
   test("backend rejects an invalid module identifier"):
-    assertThrows[IllegalArgumentException](YataStreamingSystemVerilog.emit(3, 3, "bad-name"))
+    assertThrows[IllegalArgumentException](YataMicrocodedSystemVerilog.emit(3, 3, ProfileName.Baseline, "bad-name"))
 
   test("streaming backend emits all characterized YATA points"):
-    val small = YataStreamingSystemVerilog.emit(3, 3, "SmallYata8RainttP27Rtl")
-    val medium = YataStreamingSystemVerilog.emit(6, 3, "SmallYata8x8RainttP27Rtl")
-    val large = YataStreamingSystemVerilog.emit(9, 6, "YataRainttTop")
-    assert(small.contains("localparam integer YATA_N = 8"))
-    assert(medium.contains("localparam integer YATA_CYCLES = 8"))
-    assert(large.contains("localparam integer YATA_N = 512"))
+    val small = YataMicrocodedSystemVerilog.emit(3, 3, ProfileName.Baseline, "SmallYata8RainttP27Rtl")
+    val medium = YataMicrocodedSystemVerilog.emit(6, 3, ProfileName.Baseline, "SmallYata8x8RainttP27Rtl")
+    val large = YataMicrocodedSystemVerilog.emit(9, 6, ProfileName.F300, "YataRainttTop")
+    assert(small.contains("I_LENGTH="))
+    assert(medium.contains("localparam integer STEP_GAP=0"))
+    assert(large.contains("localparam integer STEP_GAP=1"))
     assert(large.contains("io_intt_in_63"))

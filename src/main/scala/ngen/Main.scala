@@ -3,7 +3,7 @@ package ngen
 import ngen.algebra.Domains
 import ngen.cli.{Cli, Command, Direction, GeneratorConfig}
 import ngen.transform.ReferenceNtt
-import ngen.backend.YataStreamingSystemVerilog
+import ngen.backend.YataMicrocodedSystemVerilog
 import ngen.backend.{DesignMetadata, GraphSystemVerilog, TransformDot}
 import ngen.backend.HogeSystemVerilog
 import ngen.backend.KyberSystemVerilog
@@ -51,7 +51,7 @@ object Main:
         case "yata64" => "SmallYata8x8RainttP27Rtl"
         case _ => "YataRainttTop"
       val top = config.top.getOrElse(defaultTop)
-      Files.writeString(output, YataStreamingSystemVerilog.emit(config.domain.logSize, config.streamingLog, top))
+      Files.writeString(output, YataMicrocodedSystemVerilog.emit(config.domain.logSize, config.streamingLog, config.profile, top))
       println(s"Written design in $output.")
       true
     else if config.domain.name == "hoge32" then
