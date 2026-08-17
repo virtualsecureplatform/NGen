@@ -2,7 +2,7 @@ package ngen.backend
 
 import ngen.arithmetic.HogeField
 import ngen.rtl.ProfileName
-import ngen.rtl.{IndexedOperation, MicroProgram}
+import ngen.rtl.{IndexedOperation, MicroProgram, SwitchTransposeSpec, TransposeKind}
 
 object HogeSystemVerilog:
   private sealed trait MicroOp extends IndexedOperation:
@@ -155,15 +155,18 @@ object HogeSystemVerilog:
        |/* verilator lint_on BLKSEQ */
        |""".stripMargin
 
-  def emitStreamingIntt(top: String = "INTTWrap", profile: ProfileName = ProfileName.Baseline): String = emitStreaming(top, inverse = true, profile)
-  def emitStreamingNtt(top: String = "NTTWrap", profile: ProfileName = ProfileName.Baseline): String = emitStreaming(top, inverse = false, profile)
+  def emitStreamingIntt(top: String = "INTTWrap", profile: ProfileName = ProfileName.Baseline, transpose: TransposeKind = TransposeKind.Indexed): String = emitStreaming(top, inverse = true, profile, transpose)
+  def emitStreamingNtt(top: String = "NTTWrap", profile: ProfileName = ProfileName.Baseline, transpose: TransposeKind = TransposeKind.Indexed): String = emitStreaming(top, inverse = false, profile, transpose)
   def streamingBundles(inverse: Boolean, profile: ProfileName = ProfileName.Baseline): Int =
     MicroProgram.schedule(if inverse then inverseProgram(10,5) else forwardProgram(10,5), 32).length * (if profile == ProfileName.F300 then 2 else 1)
 
-  private def emitStreaming(top: String, inverse: Boolean, profile: ProfileName): String =
+  private def emitStreaming(top: String, inverse: Boolean, profile: ProfileName, transpose: TransposeKind): String =
     val size = 1024
     val lanes = 32
     val cycles = 32
+    val useSwitch = transpose == TransposeKind.Switch && inverse
+    require(transpose == TransposeKind.Indexed || inverse, "HOGE forward switch transpose requires the future HomGate pipeline backend")
+    val moduleName = if useSwitch then s"${top}Core" else top
     val groups = MicroProgram.schedule(if inverse then inverseProgram(10,5) else forwardProgram(10,5), lanes).bundles
     require(groups.size < 3990, s"HOGE program exceeds watchdog: ${groups.size} bundles")
     val inputWidth = if inverse then 32 else 64
@@ -185,7 +188,7 @@ object HogeSystemVerilog:
     val laneInstances = Vector.tabulate(lanes)(i => s"HogeMicroLane lane_$i(lane_kind_$i,lane_a_$i,lane_b_$i,lane_constant_$i,lane_out_a_$i,lane_out_b_$i);")
     def inputCases: String = (0 until cycles).map { cycle =>
       val assignments = Vector.tabulate(lanes) { lane =>
-        val index = if inverse then lane * cycles + cycle else cycle * lanes + lane
+        val index = if inverse && !useSwitch then lane * cycles + cycle else cycle * lanes + lane
         s"input$index=io_in[$lane*$inputWidth+:$inputWidth];"
       }
       s"$cycle: begin\n${lines(assignments,10)}\n        end"
@@ -197,11 +200,11 @@ object HogeSystemVerilog:
     val initializeWork = Vector.tabulate(size)(i => s"${w(i)}<=${if inverse then s"{32'd0,input$i}" else s"input$i"};")
     val readyPort = if inverse then "" else "  output io_ready,\n"
     val readyAssign = if inverse then "" else "  assign io_ready = io_enable && !output_active && !executing && !finishing;"
-    s"""// Generated HOGE 1024-point ${if inverse then "INTT" else "NTT"}.
+    val core = s"""// Generated HOGE 1024-point ${if inverse then "INTT" else "NTT"}.
        |/* verilator lint_off BLKSEQ */
        |/* verilator lint_off UNUSEDSIGNAL */
        |/* verilator lint_off WIDTHEXPAND */
-       |module $top(
+       |module $moduleName(
        |  input clock,
        |  input reset,
        |  input io_enable,
@@ -246,4 +249,21 @@ object HogeSystemVerilog:
        |/* verilator lint_on WIDTHEXPAND */
        |/* verilator lint_on UNUSEDSIGNAL */
        |/* verilator lint_on BLKSEQ */
+       |""".stripMargin
+    if useSwitch then core + "\n" + hogeSwitchWrapper(top,moduleName) else core
+
+  private def hogeSwitchWrapper(top: String, coreName: String): String =
+    val spec = SwitchTransposeSpec(5,32)
+    val inputs = Vector.tabulate(32)(lane => s"assign switch_in[${lane*32}+:32]=io_in[${lane*32}+:32];")
+    val coreInputs = Vector.tabulate(32)(lane => s"wire [31:0] core_in_$lane; assign core_in_$lane=switch_out[${lane*32}+:32];")
+    val packedCoreInput = Vector.tabulate(32)(lane => s"assign core_packed_in[${lane*32}+:32]=core_in_$lane;")
+    s"""${SwitchTransposeSystemVerilog.definitions(spec)}
+       |module $top(input clock,input reset,input io_enable,output io_validout,input [1023:0] io_in,output [2047:0] io_out);
+       |  wire [1023:0] switch_in,switch_out,core_packed_in; wire switch_valid;
+       |  ${inputs.mkString("\n  ")}
+       |  ${coreInputs.mkString("\n  ")}
+       |  ${packedCoreInput.mkString("\n  ")}
+       |  NGenSwitchTransposeNetwork_5 transpose(clock,reset,io_enable,switch_in,switch_valid,switch_out);
+       |  $coreName core(clock,reset,switch_valid,io_validout,core_packed_in,io_out);
+       |endmodule
        |""".stripMargin

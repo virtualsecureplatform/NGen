@@ -2,6 +2,7 @@ package ngen
 
 import ngen.backend.YataMicrocodedSystemVerilog
 import ngen.rtl.ProfileName
+import ngen.rtl.TransposeKind
 import org.scalatest.funsuite.AnyFunSuite
 
 class YataSystemVerilogSpec extends AnyFunSuite:
@@ -25,3 +26,9 @@ class YataSystemVerilogSpec extends AnyFunSuite:
     assert(medium.contains("localparam integer STEP_GAP=0"))
     assert(large.contains("localparam integer STEP_GAP=1"))
     assert(large.contains("io_intt_in_63"))
+
+  test("switch transpose backend wraps the natural-order YATA core"):
+    val rtl = YataMicrocodedSystemVerilog.emit(6,3,ProfileName.Baseline,"YataSwitch",TransposeKind.Switch)
+    assert(rtl.contains("module NGenSwitchTransposeUnit_3"))
+    assert(rtl.contains("module YataSwitchCore"))
+    assert(rtl.contains("module YataSwitch("))

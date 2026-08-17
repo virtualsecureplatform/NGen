@@ -26,6 +26,15 @@ object PipelineProfile:
 enum ReductionKind:
   case YataSredc, Goldilocks, KyberMontgomery, Barrett
 
+enum TransposeKind:
+  case Indexed, Switch
+
+object TransposeKind:
+  def parse(value: String): TransposeKind = value.toLowerCase match
+    case "indexed" => TransposeKind.Indexed
+    case "switch" => TransposeKind.Switch
+    case other => throw new IllegalArgumentException(s"unknown transpose '$other'; expected indexed or switch")
+
 enum PortDirection:
   case Input, Output
 

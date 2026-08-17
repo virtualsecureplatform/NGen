@@ -49,6 +49,19 @@ logarithms. Pipeline profiles are `baseline` and `f300`; the latter adds a
 scheduling gap between microcoded bundles or uses the deeper generic graph
 latencies. `f300` is a pipeline intent, not a vendor timing guarantee.
 
+`-transpose indexed` preserves the v0.1 compiled-address implementation.
+`-transpose switch` uses recursive HOGE `SwitchTransposeUnit` networks for
+YATA inverse input/forward output and HOGE inverse input streaming transposes.
+YATA supports switch transpose in both directions. HOGE currently supports it
+for `intt`; forward HOGE requires switches interleaved with the recursive
+HomGate butterfly pipeline and is rejected instead of silently changing the
+architecture.
+The standalone primitive/network can be emitted with:
+
+```bash
+./ngen.bat -n 3 -data-width 32 -o transpose8.sv switchtranspose
+```
+
 Every generation writes `<output-stem>.json`. `-graph` writes the transform
 decomposition and `-rtlgraph` writes the scheduled architecture graph.
 
@@ -61,6 +74,7 @@ sibling evaluator:
 scripts/ngen_llm_ntt.py \
   --task small_yata8x8_raintt_p27 \
   --llm-ntt-root ../LLM-NTT-Examples \
+  --transpose switch \
   --with-yosys
 ```
 
@@ -73,6 +87,9 @@ couple NGen to the LLM candidate-selection runner.
   Kyber's incomplete schedule, timed alignment, and code generation.
 - `scripts/test_generated_rtl.sh` lint-compiles and simulates a generated custom
   NTT against a known vector.
+- `scripts/test_switch_transpose.sh` verifies an 8-by-8 tagged stream through
+  the recursive switch network, and the Yosys smoke suite includes a
+  switch-backed YATA streaming wrapper.
 - `LLM-NTT-Examples` provides TFHEpp/cuHEpp/Kyber vector oracles for every
   characterized preset, including a standalone HOGE forward-NTT oracle.
 - The evaluator's `--with-yosys --yosys-candidate-only` path records flattened

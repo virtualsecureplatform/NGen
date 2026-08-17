@@ -7,6 +7,8 @@ import ngen.backend.YataMicrocodedSystemVerilog
 import ngen.backend.{DesignMetadata, GraphSystemVerilog, TransformDot}
 import ngen.backend.HogeSystemVerilog
 import ngen.backend.KyberSystemVerilog
+import ngen.backend.SwitchTransposeSystemVerilog
+import ngen.rtl.SwitchTransposeSpec
 import ngen.rtl.{Architecture, GenericNttGraph, PipelineProfile, Port, PortDirection, ReductionKind, StreamingContract, ValueFormat}
 
 import java.nio.file.{Files, Path}
@@ -36,6 +38,7 @@ object Main:
       |  "streaming_width": ${config.streamingWidth},
       |  "radix": ${config.radix},
       |  "profile": "$profile",
+      |  "transpose": "${config.transpose.toString.toLowerCase}",
       |  "reduction": "$reduction",
       |  "latency": $latency,
       |  "initiation_interval": $initiationInterval,
@@ -48,7 +51,8 @@ object Main:
     Files.writeString(Path.of(base + ".json"), json)
     if config.graph then Files.writeString(Path.of(base + ".graph.gv"), TransformDot.emit(config.domain, config.direction == Direction.Inverse, config.radixLog))
     if config.rtlGraph then
-      Files.writeString(Path.of(base + ".rtl.gv"), s"digraph rtl { input -> buffer -> ${reduction.toLowerCase} -> output; }\n")
+      val transposeNode = if config.transpose == ngen.rtl.TransposeKind.Switch then " -> switch_transpose" else ""
+      Files.writeString(Path.of(base + ".rtl.gv"), s"digraph rtl { input$transposeNode -> buffer -> ${reduction.toLowerCase} -> output; }\n")
   private def printPlan(config: GeneratorConfig): Unit =
     val direction = config.direction match
       case Direction.Forward => "forward NTT"
@@ -89,13 +93,18 @@ object Main:
         case "yata64" => "SmallYata8x8RainttP27Rtl"
         case _ => "YataRainttTop"
       val top = config.top.getOrElse(defaultTop)
-      Files.writeString(output, YataMicrocodedSystemVerilog.emit(config.domain.logSize, config.streamingLog, config.profile, top))
+      Files.writeString(output, YataMicrocodedSystemVerilog.emit(config.domain.logSize, config.streamingLog, config.profile, top, config.transpose))
       val cycles = config.domain.size / config.streamingWidth
       val schedule = YataMicrocodedSystemVerilog.scheduleLengths(config.domain.logSize, config.streamingLog, config.profile)
-      writePresetArtifacts(config, output, "YataSredc", cycles, cycles, schedule._1.max(schedule._2) + 2, schedule._1.max(schedule._2))
+      val switchOverhead =
+        if config.transpose != ngen.rtl.TransposeKind.Switch || cycles == 1 then 0
+        else if config.streamingWidth == cycles then cycles - 1
+        else 2 * cycles - 1
+      writePresetArtifacts(config, output, "YataSredc", cycles, cycles, schedule._1.max(schedule._2) + 2 + switchOverhead, schedule._1.max(schedule._2))
       println(s"Written design in $output.")
       true
     else if config.domain.name == "hoge32" then
+      require(config.transpose == ngen.rtl.TransposeKind.Indexed, "hoge32 has no streaming transpose boundary")
       require(config.streamingLog == 5 && config.radixLog == 5, "hoge32 requires -k 5 -r 5")
       val output = Path.of(config.output.getOrElse("design.sv"))
       Option(output.getParent).foreach(Files.createDirectories(_))
@@ -109,13 +118,15 @@ object Main:
       Option(output.getParent).foreach(Files.createDirectories(_))
       val inverse = config.direction == Direction.Inverse
       val top = config.top.getOrElse(if inverse then "INTTWrap" else "NTTWrap")
-      val rtl = if inverse then HogeSystemVerilog.emitStreamingIntt(top, config.profile) else HogeSystemVerilog.emitStreamingNtt(top, config.profile)
+      val rtl = if inverse then HogeSystemVerilog.emitStreamingIntt(top, config.profile, config.transpose) else HogeSystemVerilog.emitStreamingNtt(top, config.profile, config.transpose)
       Files.writeString(output, rtl)
       val bundles = HogeSystemVerilog.streamingBundles(inverse, config.profile)
-      writePresetArtifacts(config, output, "Goldilocks", 32, 32, bundles + 2, bundles)
+      val switchOverhead = if inverse && config.transpose == ngen.rtl.TransposeKind.Switch then 31 else 0
+      writePresetArtifacts(config, output, "Goldilocks", 32, 32, bundles + 2 + switchOverhead, bundles)
       println(s"Written design in $output.")
       true
     else if config.domain.name == "custom" then
+      require(config.transpose == ngen.rtl.TransposeKind.Indexed, "custom-prime v0.1 RTL supports indexed transpose only")
       require(config.streamingLog == config.domain.logSize, "custom-prime RTL in v0.1 requires -k equal to -n")
       require(config.radixLog == 1, "custom-prime RTL in v0.1 requires -r 1")
       val profile = PipelineProfile.named(config.profile)
@@ -156,6 +167,11 @@ object Main:
         case Command.Version => println(Cli.Version)
         case Command.Presets =>
           Domains.all.foreach(domain => println(s"${domain.name}\tq=${domain.modulus.q}\tN=${domain.size}\t${domain.description}"))
+        case Command.SwitchTranspose(logSize, dataWidth, outputName, topName) =>
+          val output = Path.of(outputName.getOrElse("switch-transpose.sv"))
+          Option(output.getParent).foreach(Files.createDirectories(_))
+          Files.writeString(output, SwitchTransposeSystemVerilog.emit(SwitchTransposeSpec(logSize, dataWidth), topName.getOrElse("SwitchTransposeTop")))
+          println(s"Written switch transpose in $output.")
         case Command.Generate(config) =>
           printPlan(config)
           if config.check then check(config)

@@ -18,6 +18,9 @@ synthesize "${run_dir}/generic.sv" main
 bash ngen.bat -preset yata8 -k 3 -r 3 -o "${run_dir}/yata.sv" raintt
 synthesize "${run_dir}/yata.sv" SmallYata8RainttP27Rtl
 
+bash ngen.bat -preset yata64 -k 3 -r 3 -transpose switch -o "${run_dir}/yata-switch.sv" raintt
+synthesize "${run_dir}/yata-switch.sv" SmallYata8x8RainttP27Rtl
+
 bash ngen.bat -preset hoge32 -k 5 -r 5 -o "${run_dir}/hoge.sv" ntt
 synthesize "${run_dir}/hoge.sv" SmallHoge32P64Rtl
 

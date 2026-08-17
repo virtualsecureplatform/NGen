@@ -20,6 +20,12 @@ TASKS: dict[str, tuple[list[str], str]] = {
     "hoge_streaming_ntt_1024_p64": (["-preset", "hoge1024", "-k", "5", "-r", "5", "ntt"], "NTTWrap.v"),
     "kyber_ntt_256_p12_pe1": (["-preset", "kyber256", "-k", "0", "-r", "1", "kyberpe"], "KyberHPM1PE.v"),
 }
+SWITCH_TRANSPOSE_TASKS = {
+    "small_yata8_raintt_p27",
+    "small_yata8x8_raintt_p27",
+    "yata_raintt_512_p27",
+    "hoge_streaming_intt_1024_p64",
+}
 
 
 def run(command: list[str], cwd: Path) -> None:
@@ -33,9 +39,12 @@ def main() -> int:
     parser.add_argument("--llm-ntt-root", type=Path, default=ROOT.parent / "LLM-NTT-Examples")
     parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--profile", choices=("baseline", "f300"), default="baseline")
+    parser.add_argument("--transpose", choices=("indexed", "switch"), default="indexed")
     parser.add_argument("--with-yosys", action="store_true")
     parser.add_argument("--ngen", type=Path, default=ROOT / "ngen.bat")
     args = parser.parse_args()
+    if args.transpose == "switch" and args.task not in SWITCH_TRANSPOSE_TASKS:
+        parser.error(f"task {args.task} does not expose a switch-transpose boundary")
 
     llm_root = args.llm_ntt_root.resolve()
     output_dir = (args.output_dir or ROOT / "build" / "llm-ntt" / args.task).resolve()
@@ -45,7 +54,7 @@ def main() -> int:
     base, filename = TASKS[args.task]
     output = candidate_dir / filename
 
-    generation_args = base[:-1] + ["-profile", args.profile, "-o", str(output), base[-1]]
+    generation_args = base[:-1] + ["-profile", args.profile, "-transpose", args.transpose, "-o", str(output), base[-1]]
     if args.ngen.exists():
         run(["bash", str(args.ngen), *generation_args], ROOT)
     else:
@@ -62,6 +71,7 @@ def main() -> int:
     summary = {
         "task": args.task,
         "profile": args.profile,
+        "transpose": args.transpose,
         "candidate": str(output),
         "results": str(result_path),
         "correct": bool(result.get("correct")),

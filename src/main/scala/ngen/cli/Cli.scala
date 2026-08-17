@@ -1,7 +1,7 @@
 package ngen.cli
 
 import ngen.algebra.{Domains, Modulus, NttDomain, TransformShape}
-import ngen.rtl.ProfileName
+import ngen.rtl.{ProfileName, TransposeKind}
 
 import scala.collection.mutable
 
@@ -17,6 +17,7 @@ final case class GeneratorConfig(
     output: Option[String],
     top: Option[String],
     profile: ProfileName,
+    transpose: TransposeKind,
     graph: Boolean,
     rtlGraph: Boolean
 ):
@@ -29,6 +30,7 @@ final case class GeneratorConfig(
 
 enum Command:
   case Generate(config: GeneratorConfig)
+  case SwitchTranspose(logSize: Int, dataWidth: Int, output: Option[String], top: Option[String])
   case Presets
   case Version
   case Help
@@ -51,7 +53,9 @@ object Cli:
       |  -psi <value>    Optional primitive 2N-th root for a negacyclic transform.
       |  -o <file>       Output file; defaults to design.sv for RTL transforms.
       |  -top <name>     Override the generated top-level module name.
+      |  -data-width <w> Element width for switchtranspose; defaults to 64.
       |  -profile <name> Pipeline profile: baseline (default) or f300.
+      |  -transpose <t>  Streaming transpose: indexed (default) or switch.
       |  -graph          Emit the transform-decomposition DOT graph.
       |  -rtlgraph       Emit the scheduled RTL DOT graph.
       |  -check          Run the mathematical round-trip check before generation.
@@ -62,6 +66,7 @@ object Cli:
       |  intt            Inverse NTT.
       |  raintt          Combined YATA forward/inverse benchmark wrapper.
       |  kyberpe         Combined Kyber PE1 forward/inverse wrapper.
+      |  switchtranspose Generate a HOGE-style recursive switch transpose.
       |  presets         List built-in field/domain presets.
       |  version         Print the NGen version.
       |
@@ -94,7 +99,9 @@ object Cli:
     var check = false
     var output: Option[String] = None
     var top: Option[String] = None
+    var dataWidth = 64
     var profile = ProfileName.Baseline
+    var transpose = TransposeKind.Indexed
     var graph = false
     var rtlGraph = false
     var terminal: Option[String] = None
@@ -110,13 +117,15 @@ object Cli:
         case "-psi" => psi = Some(integer(requiredValue(args, "-psi")))
         case "-o" => output = Some(requiredValue(args, "-o"))
         case "-top" => top = Some(requiredValue(args, "-top"))
+        case "-data-width" => dataWidth = requiredValue(args, "-data-width").toInt
         case "-profile" => profile = ProfileName.parse(requiredValue(args, "-profile"))
+        case "-transpose" => transpose = TransposeKind.parse(requiredValue(args, "-transpose"))
         case "-graph" => graph = true
         case "-rtlgraph" => rtlGraph = true
         case "-check" => check = true
         case "-nologo" => ()
         case "-h" | "--help" | "help" => terminal = Some("help")
-        case value @ ("ntt" | "intt" | "raintt" | "kyberpe" | "presets" | "version") =>
+        case value @ ("ntt" | "intt" | "raintt" | "kyberpe" | "switchtranspose" | "presets" | "version") =>
           require(terminal.isEmpty, s"multiple transforms specified: ${terminal.get} and $value")
           terminal = Some(value)
         case unknown => throw new IllegalArgumentException(s"unknown argument: $unknown")
@@ -125,6 +134,12 @@ object Cli:
       case Some("help") => Command.Help
       case Some("presets") => Command.Presets
       case Some("version") => Command.Version
+      case Some("switchtranspose") =>
+        require(preset.isEmpty && q.isEmpty && root.isEmpty && psi.isEmpty, "switchtranspose uses -n and -data-width, not a transform domain")
+        val logSize = n.getOrElse(throw new IllegalArgumentException("switchtranspose requires -n"))
+        require(logSize > 0 && logSize < 16)
+        require(dataWidth > 0)
+        Command.SwitchTranspose(logSize, dataWidth, output, top)
       case Some(transform @ ("ntt" | "intt" | "raintt" | "kyberpe")) =>
         val selected = preset match
           case Some(name) =>
@@ -162,6 +177,7 @@ object Cli:
             output,
             top,
             profile,
+            transpose,
             graph,
             rtlGraph
           )
