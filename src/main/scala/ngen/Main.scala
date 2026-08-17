@@ -11,6 +11,7 @@ import ngen.backend.SwitchTransposeSystemVerilog
 import ngen.backend.PeStreamingNttSystemVerilog
 import ngen.backend.GenericSwitchTransposeWrapper
 import ngen.backend.PipelinedButterflySystemVerilog
+import ngen.backend.RnsPolynomialMultiplierSystemVerilog
 import ngen.rtl.SwitchTransposeSpec
 import ngen.rtl.{Architecture, ArchitectureKind, GenericNttGraph, PeNttSchedule, PipelineProfile, Port, PortDirection, ReductionChoice, ReductionKind, StreamProtocol, StreamingContract, ValueFormat}
 import ngen.transform.{DataOrder, IncompleteNttPlan, NttPlan, StreamingNttPlan, SwitchBoundaryPlan}
@@ -264,6 +265,11 @@ object Main:
             case _ => throw new IllegalArgumentException("butterfly pipeline reduction must be explicit")
           Files.writeString(output, PipelinedButterflySystemVerilog.emit(modulus, kind, topName.getOrElse("NGenPipelinedButterfly")))
           println(s"Written pipelined butterfly in $output.")
+        case Command.RnsPolynomial(basis, emitCrt, outputName, topName) =>
+          val output = Path.of(outputName.getOrElse("rns-polymul.sv"))
+          Option(output.getParent).foreach(Files.createDirectories(_))
+          Files.writeString(output,RnsPolynomialMultiplierSystemVerilog.emit(basis,topName.getOrElse("RnsPolynomialMultiplier"),emitCrt))
+          println(s"Written RNS polynomial multiplier in $output.")
         case Command.Generate(config) =>
           printPlan(config)
           if config.check then check(config)

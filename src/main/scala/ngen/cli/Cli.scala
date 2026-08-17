@@ -2,7 +2,7 @@ package ngen.cli
 
 import ngen.algebra.{Domains, Modulus, NttDomain, TransformShape}
 import ngen.rtl.{ArchitectureKind, ProfileName, ReductionChoice, StreamProtocol, TransposeKind}
-import ngen.transform.DataOrder
+import ngen.transform.{DataOrder, RnsBasis}
 import ngen.arithmetic.{FermatField, GeneralizedFermatField}
 
 import scala.collection.mutable
@@ -41,6 +41,7 @@ enum Command:
   case Generate(config: GeneratorConfig)
   case SwitchTranspose(logSize: Int, dataWidth: Int, output: Option[String], top: Option[String])
   case ButterflyPipeline(modulus: Modulus, reduction: ReductionChoice, output: Option[String], top: Option[String])
+  case RnsPolynomial(basis: RnsBasis, emitCrt: Boolean, output: Option[String], top: Option[String])
   case Presets
   case Version
   case Help
@@ -63,6 +64,10 @@ object Cli:
       |  -fermat <m>     Classical Fermat field F_m; requires -n and supports m=0..4.
       |  -fermat-base <a> Generalized Fermat base a; combine with -fermat-index and -n.
       |  -fermat-index <m> Exponent index for a^(2^m)+1.
+      |  -rns-q <csv>    RNS prime moduli for rnspolymul.
+      |  -rns-root <csv> Matching primitive N-th roots.
+      |  -rns-psi <csv>  Matching primitive 2N-th roots for negacyclic multiplication.
+      |  -rns-crt        Emit combinational CRT reconstruction outputs.
       |  -root <value>   Primitive N-th root for a custom domain; value may be auto.
       |  -psi <value>    Optional primitive 2N-th root; use -root auto -psi auto for automatic negacyclic roots.
       |  -base-case <n>  Stop an incomplete negacyclic NTT at blocks of size n.
@@ -88,6 +93,7 @@ object Cli:
       |  kyberpe         Combined Kyber PE1 forward/inverse wrapper.
       |  switchtranspose Generate a HOGE-style recursive switch transpose.
       |  butterflypipeline Generate a tagged three-stage modular butterfly pipeline.
+      |  rnspolymul      Generate two NTTs, pointwise multiply, and INTT per RNS prime.
       |  presets         List built-in field/domain presets.
       |  version         Print the NGen version.
       |
@@ -119,6 +125,10 @@ object Cli:
     var fermatIndex: Option[Int] = None
     var generalizedFermatBase: Option[BigInt] = None
     var generalizedFermatIndex: Option[Int] = None
+    var rnsModuli: Option[Vector[BigInt]] = None
+    var rnsRoots: Option[Vector[BigInt]] = None
+    var rnsTwists: Option[Vector[BigInt]] = None
+    var rnsCrt = false
     var root: Option[String] = None
     var psi: Option[String] = None
     var baseCase: Option[Int] = None
@@ -148,6 +158,10 @@ object Cli:
         case "-fermat" => fermatIndex = Some(requiredValue(args, "-fermat").toInt)
         case "-fermat-base" => generalizedFermatBase = Some(integer(requiredValue(args, "-fermat-base")))
         case "-fermat-index" => generalizedFermatIndex = Some(requiredValue(args, "-fermat-index").toInt)
+        case "-rns-q" => rnsModuli = Some(requiredValue(args, "-rns-q").split(',').toVector.map(integer))
+        case "-rns-root" => rnsRoots = Some(requiredValue(args, "-rns-root").split(',').toVector.map(integer))
+        case "-rns-psi" => rnsTwists = Some(requiredValue(args, "-rns-psi").split(',').toVector.map(integer))
+        case "-rns-crt" => rnsCrt = true
         case "-root" => root = Some(requiredValue(args, "-root"))
         case "-psi" => psi = Some(requiredValue(args, "-psi"))
         case "-base-case" => baseCase = Some(requiredValue(args, "-base-case").toInt)
@@ -166,7 +180,7 @@ object Cli:
         case "-check" => check = true
         case "-nologo" => ()
         case "-h" | "--help" | "help" => terminal = Some("help")
-        case value @ ("ntt" | "intt" | "raintt" | "kyberpe" | "switchtranspose" | "butterflypipeline" | "presets" | "version") =>
+        case value @ ("ntt" | "intt" | "raintt" | "kyberpe" | "switchtranspose" | "butterflypipeline" | "rnspolymul" | "presets" | "version") =>
           require(terminal.isEmpty, s"multiple transforms specified: ${terminal.get} and $value")
           terminal = Some(value)
         case unknown => throw new IllegalArgumentException(s"unknown argument: $unknown")
@@ -186,6 +200,14 @@ object Cli:
           "butterflypipeline uses -q and -reduction")
         require(reduction != ReductionChoice.Auto, "butterflypipeline requires -reduction barrett, montgomery, or shoup")
         Command.ButterflyPipeline(Modulus(q.getOrElse(throw new IllegalArgumentException("butterflypipeline requires -q"))), reduction, output, top)
+      case Some("rnspolymul") =>
+        val logSize = n.getOrElse(throw new IllegalArgumentException("rnspolymul requires -n"))
+        val moduli = rnsModuli.getOrElse(throw new IllegalArgumentException("rnspolymul requires -rns-q"))
+        val roots = rnsRoots.getOrElse(throw new IllegalArgumentException("rnspolymul requires -rns-root"))
+        val twists = rnsTwists.getOrElse(throw new IllegalArgumentException("rnspolymul requires -rns-psi"))
+        require(moduli.nonEmpty && moduli.size == roots.size && roots.size == twists.size, "RNS parameter vectors must have equal nonzero length")
+        val domains = moduli.indices.map(index => NttDomain(s"rns$index",1 << logSize,Modulus(moduli(index)),roots(index),TransformShape.Negacyclic,Some(twists(index)))).toVector
+        Command.RnsPolynomial(RnsBasis(domains),rnsCrt,output,top)
       case Some(transform @ ("ntt" | "intt" | "raintt" | "kyberpe")) =>
         val selected = preset match
           case Some(name) =>

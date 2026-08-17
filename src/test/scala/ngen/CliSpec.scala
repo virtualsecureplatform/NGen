@@ -110,3 +110,9 @@ class CliSpec extends AnyFunSuite:
     assert(classical.domain.modulus.q == 65537)
     val generalized = Cli.parse(Seq("-fermat-base", "4", "-fermat-index", "1", "-n", "2", "-k", "1", "ntt")).asInstanceOf[Command.Generate].config
     assert(generalized.domain.modulus.q == 17)
+
+  test("RNS polynomial multiplication accepts matched parameter vectors"):
+    val command=Cli.parse(Seq("-n","3","-rns-q","17,97","-rns-root","9,64","-rns-psi","3,8","rnspolymul"))
+    command match
+      case Command.RnsPolynomial(basis,_,_,_) => assert(basis.combinedModulus==1649)
+      case other => fail(s"expected RNS polynomial command, got $other")

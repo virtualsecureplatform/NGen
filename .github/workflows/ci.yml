@@ -23,6 +23,8 @@ jobs:
         run: scripts/test_streamed_ntt.py
       - name: Pipelined butterfly matrix
         run: scripts/test_pipelined_butterfly.py
+      - name: RNS polynomial multiplier
+        run: scripts/test_rns_polymul.py
       - name: Switch transpose simulation
         run: scripts/test_switch_transpose.sh
       - name: Yosys smoke qualification

@@ -169,6 +169,18 @@ Classical Fermat Number Transforms use `-fermat 0` through `-fermat 4`.
 NGen derives the modulus, transform root, and shift-only twiddle exponents.
 Power-of-two-base generalized Fermat primes use `-fermat-base <a>
 -fermat-index <m>` and the same banked radix-2/4/8 pipelines.
+
+Complete-transform RNS polynomial multiplication is generated with matched
+prime/root/twist vectors:
+
+```bash
+./ngen.bat -n 3 -rns-q 17,97 -rns-root 9,64 -rns-psi 3,8 \
+  -rns-crt -o rns-polymul.sv rnspolymul
+```
+
+Each prime receives two forward transforms, pointwise multiplication, and an
+inverse transform. Residue outputs are always emitted; `-rns-crt` adds direct
+CRT reconstruction outputs.
 - `LLM-NTT-Examples` provides TFHEpp/cuHEpp/Kyber vector oracles for every
   characterized preset, including a standalone HOGE forward-NTT oracle.
 - The evaluator's `--with-yosys --yosys-candidate-only` path records flattened
