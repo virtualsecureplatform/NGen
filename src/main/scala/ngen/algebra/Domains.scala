@@ -1,6 +1,16 @@
 package ngen.algebra
 
 object Domains:
+  val Yata8: NttDomain = NttDomain(
+    name = "yata8",
+    size = 8,
+    modulus = Modulus(BigInt("40960001")),
+    root = BigInt("40448001"),
+    shape = TransformShape.Negacyclic,
+    twist = Some(BigInt("20050378")),
+    description = "YATA radix-8 compressed RAINTT field"
+  )
+
   val Yata512: NttDomain = NttDomain(
     name = "yata512",
     size = 512,
@@ -30,7 +40,7 @@ object Domains:
     description = "CRYSTALS-Kyber field; seven-layer incomplete negacyclic NTT"
   )
 
-  val all: Vector[NttDomain] = Vector(Yata512, Hoge1024, Kyber256)
+  val all: Vector[NttDomain] = Vector(Yata8, Yata512, Hoge1024, Kyber256)
 
   def named(name: String): Option[NttDomain] = all.find(_.name == name.toLowerCase)
 

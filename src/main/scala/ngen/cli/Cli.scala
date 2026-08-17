@@ -5,14 +5,16 @@ import ngen.algebra.{Domains, Modulus, NttDomain, TransformShape}
 import scala.collection.mutable
 
 enum Direction:
-  case Forward, Inverse
+  case Forward, Inverse, Both
 
 final case class GeneratorConfig(
     domain: NttDomain,
     streamingLog: Int,
     radixLog: Int,
     direction: Direction,
-    check: Boolean
+    check: Boolean,
+    output: Option[String],
+    top: Option[String]
 ):
   val streamingWidth: Int = 1 << streamingLog
   val radix: Int = 1 << radixLog
@@ -36,19 +38,22 @@ object Cli:
       |Usage: ngen [options] <transform>
       |
       |Options:
-      |  -preset <name>  Use yata512, hoge1024, or kyber256 field conventions.
+      |  -preset <name>  Use yata8, yata512, hoge1024, or kyber256 conventions.
       |  -n <n>          log2 of the transform size (required without a preset).
       |  -k <k>          log2 of the streaming width; defaults to n.
       |  -r <r>          log2 of the radix; defaults to the largest divisor of n <= k.
       |  -q <prime>      Field modulus for a custom domain (decimal or 0x hexadecimal).
       |  -root <value>   Primitive N-th root for a custom domain.
       |  -psi <value>    Optional primitive 2N-th root for a negacyclic transform.
+      |  -o <file>       Output file; defaults to design.sv for RTL transforms.
+      |  -top <name>     Override the generated top-level module name.
       |  -check          Run the mathematical round-trip check before generation.
       |  -nologo         Accepted for SGen command-line compatibility.
       |
       |Transforms:
       |  ntt             Forward NTT.
       |  intt            Inverse NTT.
+      |  raintt          Combined YATA forward/inverse benchmark wrapper.
       |  presets         List built-in field/domain presets.
       |  version         Print the NGen version.
       |
@@ -56,6 +61,7 @@ object Cli:
       |  ngen -preset yata512 -k 6 -r 3 ntt
       |  ngen -preset hoge1024 -k 5 -r 5 intt
       |  ngen -preset kyber256 -k 0 -r 1 ntt
+      |  ngen -preset yata8 -k 3 -r 3 -o SmallYata8RainttP27Rtl.sv raintt
       |  ngen -n 3 -q 17 -root 9 -check ntt
       |""".stripMargin
 
@@ -78,6 +84,8 @@ object Cli:
     var root: Option[BigInt] = None
     var psi: Option[BigInt] = None
     var check = false
+    var output: Option[String] = None
+    var top: Option[String] = None
     var terminal: Option[String] = None
 
     while args.nonEmpty do
@@ -89,10 +97,12 @@ object Cli:
         case "-q" => q = Some(integer(requiredValue(args, "-q")))
         case "-root" => root = Some(integer(requiredValue(args, "-root")))
         case "-psi" => psi = Some(integer(requiredValue(args, "-psi")))
+        case "-o" => output = Some(requiredValue(args, "-o"))
+        case "-top" => top = Some(requiredValue(args, "-top"))
         case "-check" => check = true
         case "-nologo" => ()
         case "-h" | "--help" | "help" => terminal = Some("help")
-        case value @ ("ntt" | "intt" | "presets" | "version") =>
+        case value @ ("ntt" | "intt" | "raintt" | "presets" | "version") =>
           require(terminal.isEmpty, s"multiple transforms specified: ${terminal.get} and $value")
           terminal = Some(value)
         case unknown => throw new IllegalArgumentException(s"unknown argument: $unknown")
@@ -101,7 +111,7 @@ object Cli:
       case Some("help") => Command.Help
       case Some("presets") => Command.Presets
       case Some("version") => Command.Version
-      case Some(transform @ ("ntt" | "intt")) =>
+      case Some(transform @ ("ntt" | "intt" | "raintt")) =>
         val selected = preset match
           case Some(name) =>
             require(n.isEmpty && q.isEmpty && root.isEmpty && psi.isEmpty, "a preset cannot be combined with -n, -q, -root, or -psi")
@@ -131,8 +141,12 @@ object Cli:
             selected,
             streamingLog,
             radixLog,
-            if transform == "ntt" then Direction.Forward else Direction.Inverse,
-            check
+            if transform == "ntt" then Direction.Forward
+            else if transform == "intt" then Direction.Inverse
+            else Direction.Both,
+            check,
+            output,
+            top
           )
         )
       case _ => throw new IllegalArgumentException("a transform name is required")

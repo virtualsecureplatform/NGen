@@ -35,3 +35,12 @@ class CliSpec extends AnyFunSuite:
 
   test("a custom domain requires size, modulus, and root"):
     assertThrows[IllegalArgumentException](Cli.parse(Seq("-n", "3", "ntt")))
+
+  test("RAINTT accepts SGen-style output and top options"):
+    val command = Cli.parse(Seq("-preset", "yata8", "-k", "3", "-r", "3", "-o", "out.sv", "-top", "Candidate", "raintt"))
+    val config = command match
+      case Command.Generate(value) => value
+      case other => fail(s"expected generation command, got $other")
+    assert(config.direction == Direction.Both)
+    assert(config.output.contains("out.sv"))
+    assert(config.top.contains("Candidate"))
