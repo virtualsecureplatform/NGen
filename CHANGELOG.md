@@ -33,6 +33,8 @@
 - Added runtime-loaded Barrett modulus/reciprocal ports and per-operation
   twiddle inputs on the tagged butterfly pipeline.
 - Added twiddle-one bypasses and explicit product sharing across fused layers.
+- Added writable packed operation/address/twiddle records on complete banked
+  NTT cores, with record geometry in metadata.
 
 ## 0.1.0
 

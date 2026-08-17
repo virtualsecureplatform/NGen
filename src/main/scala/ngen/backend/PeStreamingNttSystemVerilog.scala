@@ -30,13 +30,21 @@ object PeStreamingNttSystemVerilog:
     Metrics(streamCycles, streamCycles, schedule.bundles.size, executionCycles, latency, initiationInterval,
       schedule.mapping.bankCount, schedule.mapping.depth, schedule.peCount, schedule.radix)
 
+  def packedControlWidth(schedule: PeNttSchedule): Int =
+    val width=schedule.plan.domain.modulus.bitWidth;val radix=schedule.radix
+    val bankWidth=math.max(1,Integer.numberOfTrailingZeros(schedule.mapping.bankCount))
+    val rowWidth=math.max(1,32-Integer.numberOfLeadingZeros(schedule.mapping.depth-1))
+    val steps=schedule.radixLog*radix/2
+    2+2*width+2*radix*(1+bankWidth+rowWidth)+(if radix==2 then 0 else 2*width*steps)
+
   def emit(
       schedule: PeNttSchedule,
       streamingWidth: Int,
       top: String,
       profile: ProfileName,
       reduction: ReductionKind,
-      protocol: StreamProtocol = StreamProtocol.NextPulse
+      protocol: StreamProtocol = StreamProtocol.NextPulse,
+      runtimeControl: Boolean = false
   ): String =
     require(top.matches("[A-Za-z_][A-Za-z0-9_$]*"), s"invalid SystemVerilog module name: $top")
     require(Set(ReductionKind.Barrett, ReductionKind.Montgomery, ReductionKind.Shoup, ReductionKind.FermatShift)(reduction))
@@ -102,7 +110,9 @@ object PeStreamingNttSystemVerilog:
     val protocolPorts = protocol match
       case StreamProtocol.NextPulse => Vector("input next", "output ready", "output reg next_out")
       case StreamProtocol.ReadyValid => Vector("input in_valid", "output in_ready", "output reg out_valid", "input out_ready")
-    val ports = Vector("input clock", "input reset") ++ protocolPorts ++
+    val peSelectorWidth=math.max(1,32-Integer.numberOfLeadingZeros(peCount-1));val bundleSelectorWidth=math.max(1,32-Integer.numberOfLeadingZeros(schedule.bundles.size-1));val declaredControlWidth=packedControlWidth(schedule)
+    val configurationPorts=if runtimeControl then Vector("input config_control_we",s"input [${peSelectorWidth-1}:0] config_control_pe",s"input [${bundleSelectorWidth-1}:0] config_control_address",s"input [${declaredControlWidth-1}:0] config_control_data") else Vector.empty
+    val ports = Vector("input clock", "input reset") ++ protocolPorts ++ configurationPorts ++
       Vector.tabulate(streamingWidth)(lane => s"input [${width - 1}:0] i$lane") ++
       Vector.tabulate(streamingWidth)(lane => s"output reg [${width - 1}:0] o$lane")
     val rowWidth = math.max(1, 32 - Integer.numberOfLeadingZeros(mapping.depth - 1))
@@ -154,11 +164,11 @@ object PeStreamingNttSystemVerilog:
     val maxButterflySteps = radixLog * radix / 2
     val networkTemplate = schedule.bundles.flatMap(_.operations).find(_.kind == PeOperationKind.Dense).map(_.steps).getOrElse(Vector.empty)
     val bankWidth = math.max(1, Integer.numberOfTrailingZeros(mapping.bankCount))
-    val packedControlWidth = 2 + 2 * width + 2 * radix * (1 + bankWidth + rowWidth) + (if radix == 2 then 0 else 2 * width * maxButterflySteps)
+    val controlRecordWidth = 2 + 2 * width + 2 * radix * (1 + bankWidth + rowWidth) + (if radix == 2 then 0 else 2 * width * maxButterflySteps)
 
     val peDeclarations =
       if radix == 2 then (0 until peCount).map { pe =>
-        s"reg [1:0] pe_kind_$pe;reg [${width - 1}:0] pe_a_$pe,pe_b_$pe,pe_constant_$pe,pe_precon_$pe;reg [${packedControlWidth - 1}:0] issued_control_$pe,launch_control_$pe;wire [${packedControlWidth - 1}:0] retired_control_$pe;wire pe_pipeline_valid_$pe;wire [${width - 1}:0] pe_out_${pe}_0,pe_out_${pe}_1;wire pe_pipeline_launch_$pe=launch_valid&&(pe_kind_$pe!=0);NGenInternalPipelinedButterfly #(.TAG_WIDTH($packedControlWidth)) pe_pipeline_$pe(clock,reset,pe_pipeline_launch_$pe,pe_kind_$pe,pe_a_$pe,pe_b_$pe,pe_constant_$pe,pe_precon_$pe,launch_control_$pe,pe_pipeline_valid_$pe,pe_out_${pe}_0,pe_out_${pe}_1,retired_control_$pe);"
+        s"reg [1:0] pe_kind_$pe;reg [${width - 1}:0] pe_a_$pe,pe_b_$pe,pe_constant_$pe,pe_precon_$pe;reg [${controlRecordWidth - 1}:0] issued_control_$pe,launch_control_$pe;wire [${controlRecordWidth - 1}:0] retired_control_$pe;wire pe_pipeline_valid_$pe;wire [${width - 1}:0] pe_out_${pe}_0,pe_out_${pe}_1;wire pe_pipeline_launch_$pe=launch_valid&&(pe_kind_$pe!=0);NGenInternalPipelinedButterfly #(.TAG_WIDTH($controlRecordWidth)) pe_pipeline_$pe(clock,reset,pe_pipeline_launch_$pe,pe_kind_$pe,pe_a_$pe,pe_b_$pe,pe_constant_$pe,pe_precon_$pe,launch_control_$pe,pe_pipeline_valid_$pe,pe_out_${pe}_0,pe_out_${pe}_1,retired_control_$pe);"
       }.mkString("\n  ")
       else (0 until peCount).map { pe =>
         val inputs = (0 until radix).map(slot => s"reg [${width - 1}:0] pe_${pe}_in_$slot;").mkString
@@ -242,7 +252,7 @@ object PeStreamingNttSystemVerilog:
       (if radix == 2 then Vector.empty else (0 until maxButterflySteps).flatMap(step => Vector(ControlField(s"step_constant_$step",width),ControlField(s"step_precon_$step",width))))
     val controlOffsets = controlFields.scanLeft(0)((offset,field) => offset + field.bits).dropRight(1).zip(controlFields).map { case (offset,field) => field.name -> offset }.toMap
     val controlWidth = controlFields.map(_.bits).sum
-    require(controlWidth == packedControlWidth)
+    require(controlWidth == controlRecordWidth && controlWidth == declaredControlWidth)
     def controlValue(operation: Option[ngen.rtl.PeOperation], fieldName: String): BigInt = fieldName match
       case "kind" => operation.map(_.kind match
         case PeOperationKind.Scale => 1
@@ -304,6 +314,9 @@ object PeStreamingNttSystemVerilog:
         s"control_${pe}_rom[$bundleIndex]=${controlWidth}'h${record.toString(16)};"
       }
     }.mkString("\n    ")
+    val runtimeControlWrite = if runtimeControl then
+      s"if(config_control_we)case(config_control_pe)${(0 until peCount).map(pe=>s"${peSelectorWidth}'d$pe:control_${pe}_rom[config_control_address]<=config_control_data;").mkString}default:begin end endcase"
+    else ""
     def bankCase(bankSignal: String)(body: Int => String): String =
       (0 until mapping.bankCount).map(bank => s"${bankWidth}'d$bank:begin ${body(bank)} end").mkString(s"case($bankSignal)"," "," default:begin end endcase")
     val loadPrefix = if radix == 2 then "load_" else ""
@@ -429,6 +442,7 @@ object PeStreamingNttSystemVerilog:
        |  end
        |  always @(posedge clock) begin
        |    $memoryPorts
+       |    $runtimeControlWrite
        |  end
        |  always @(posedge clock) begin
        |    if(reset)begin buffer_0_state<=EMPTY;buffer_1_state<=EMPTY;capture_active<=0;exec_active<=0;output_active<=0;output_prefetched<=0;capture_count<=0;bundle_index<=0;gap_count<=0;output_count<=0;exec_phase<=0;$pipelineReset$resetProtocol$resetOutputs end

@@ -158,7 +158,7 @@ object Main:
       val fullyParallelCompatible = config.streamingLog == config.domain.logSize &&
         config.inputOrder == DataOrder.Natural && config.outputOrder == DataOrder.Natural &&
         !config.domain.shape.isInstanceOf[ngen.algebra.TransformShape.IncompleteNegacyclic] &&
-        config.reduction != ReductionChoice.Montgomery && config.reduction != ReductionChoice.Shoup && config.reduction != ReductionChoice.FermatShift && config.radixLog == 1 && config.peCount.isEmpty && config.protocol == StreamProtocol.NextPulse && config.transpose == ngen.rtl.TransposeKind.Indexed
+        config.reduction != ReductionChoice.Montgomery && config.reduction != ReductionChoice.Shoup && config.reduction != ReductionChoice.FermatShift && config.radixLog == 1 && config.peCount.isEmpty && config.protocol == StreamProtocol.NextPulse && config.transpose == ngen.rtl.TransposeKind.Indexed && !config.runtimeControl
       val reductionKind = config.reduction match
         case ReductionChoice.Auto if config.domain.name.startsWith("fermat") || config.domain.name.startsWith("generalized-fermat") => ReductionKind.FermatShift
         case ReductionChoice.Auto | ReductionChoice.Barrett => ReductionKind.Barrett
@@ -208,10 +208,12 @@ object Main:
             "bank_depth" -> metrics.bankDepth,
             "coefficient_buffers" -> 2,
             "operation_bundles" -> metrics.bundleCount,
-            "switch_transpose" -> (if useSwitchTranspose then 1 else 0)
+            "switch_transpose" -> (if useSwitchTranspose then 1 else 0),
+            "runtime_control" -> (if config.runtimeControl then 1 else 0),
+            "control_record_width" -> PeStreamingNttSystemVerilog.packedControlWidth(schedule)
           )
           val coreTop = if useSwitchTranspose then s"${top}Core" else top
-          val coreRtl = PeStreamingNttSystemVerilog.emit(schedule, config.streamingWidth, coreTop, config.profile, reductionKind, config.protocol)
+          val coreRtl = PeStreamingNttSystemVerilog.emit(schedule, config.streamingWidth, coreTop, config.profile, reductionKind, config.protocol, config.runtimeControl)
           Files.writeString(output,
             if useSwitchTranspose then GenericSwitchTransposeWrapper.emit(coreRtl, top, coreTop, config.streamingWidth, config.domain.modulus.bitWidth)
             else coreRtl)

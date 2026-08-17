@@ -116,3 +116,7 @@ class CliSpec extends AnyFunSuite:
     command match
       case Command.RnsPolynomial(basis,_,_,_) => assert(basis.combinedModulus==1649)
       case other => fail(s"expected RNS polynomial command, got $other")
+
+  test("custom core accepts writable runtime control records"):
+    val config=Cli.parse(Seq("-n","3","-k","1","-q","17","-root","9","-runtime-control","ntt")).asInstanceOf[Command.Generate].config
+    assert(config.runtimeControl)

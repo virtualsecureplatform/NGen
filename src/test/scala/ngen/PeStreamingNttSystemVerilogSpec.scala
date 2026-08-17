@@ -58,3 +58,10 @@ class PeStreamingNttSystemVerilogSpec extends AnyFunSuite:
     assert(rtl.contains("pe_0_layer_0_0"))
     assert(rtl.contains("pe_0_layer_1_0"))
     assert(rtl.contains("pe_0_valid_pipe[1]"))
+
+  test("backend exposes writable packed control records"):
+    val schedule=PeNttSchedule.build(NttPlan.radix2(domain,inverse=false),1,2,4)
+    val rtl=PeStreamingNttSystemVerilog.emit(schedule,4,"RuntimeControl",ProfileName.Baseline,ReductionKind.Shoup,runtimeControl=true)
+    assert(rtl.contains("input config_control_we"))
+    assert(rtl.contains("config_control_address"))
+    assert(rtl.contains("control_0_rom[config_control_address]<=config_control_data"))

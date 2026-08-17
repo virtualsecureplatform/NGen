@@ -92,6 +92,12 @@ reciprocal inputs; twiddle and precondition values are already supplied per
 operation. The field inputs must remain stable until all tagged operations
 drain.
 
+Custom banked cores accept `-runtime-control` to expose synchronous writes to
+their packed per-PE operation records. Metadata reports
+`control_record_width`, `operation_bundles`, and `pe_count`; each record carries
+the operation kind, bank rows, twiddle/precondition values, and fused-layer
+constants. Configuration writes must occur while no transform is active.
+
 The radix-2 transform controller issues one independent bundle per cycle,
 tracks multiple tagged results in flight, permits simultaneous bank reads and
 older-result writes, and drains the arithmetic pipeline only at transform-stage

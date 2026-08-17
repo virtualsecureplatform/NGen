@@ -26,6 +26,7 @@ final case class GeneratorConfig(
     inputOrder: DataOrder,
     outputOrder: DataOrder,
     protocol: StreamProtocol,
+    runtimeControl: Boolean,
     graph: Boolean,
     rtlGraph: Boolean
 ):
@@ -85,6 +86,7 @@ object Cli:
       |  -output-order <o> Output stream order: natural (default) or bitreversed.
       |  -protocol <p>   Stream control: next (default) or ready-valid.
       |  -runtime-field  Expose runtime modulus/reduction-constant ports on butterflypipeline.
+      |  -runtime-control Expose writable packed PE operation/twiddle records.
       |  -graph          Emit the transform-decomposition DOT graph.
       |  -rtlgraph       Emit the scheduled RTL DOT graph.
       |  -check          Run the mathematical round-trip check before generation.
@@ -151,6 +153,7 @@ object Cli:
     var outputOrder = DataOrder.Natural
     var protocol = StreamProtocol.NextPulse
     var runtimeField = false
+    var runtimeControl = false
     var graph = false
     var rtlGraph = false
     var terminal: Option[String] = None
@@ -186,6 +189,7 @@ object Cli:
         case "-output-order" => outputOrder = DataOrder.parse(requiredValue(args, "-output-order"))
         case "-protocol" => protocol = StreamProtocol.parse(requiredValue(args, "-protocol"))
         case "-runtime-field" => runtimeField = true
+        case "-runtime-control" => runtimeControl = true
         case "-graph" => graph = true
         case "-rtlgraph" => rtlGraph = true
         case "-check" => check = true
@@ -293,6 +297,7 @@ object Cli:
             inputOrder,
             outputOrder,
             protocol,
+            runtimeControl,
             graph,
             rtlGraph
           )
