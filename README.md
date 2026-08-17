@@ -13,7 +13,9 @@ The current `0.1.0-SNAPSHOT` provides:
 - a compositional transform IR with permutations, diagonals, radix-2 stages,
   and composition; and
 - a synthesizable SystemVerilog backend for the fully-parallel YATA radix-8
-  NTT/INTT benchmark wrapper.
+  NTT/INTT benchmark wrapper; and
+- a timed RTL signal graph that inserts explicit delay nodes to align operands
+  according to configurable modular-operator latencies.
 
 Kyber is deliberately represented as an incomplete negacyclic transform. Its
 prime `3329` supports an order-256 root (`17`) but no order-512 root, so the
@@ -67,8 +69,9 @@ SREDC implementation deliberately emits no Verilog modulo operator.
 
 ## Next milestone
 
-The next milestone replaces the first backend's single fully-parallel schedule
-with an explicit timed RTL operator graph. It will attach latency and initiation
-interval metadata to modular operators, insert valid/data alignment registers,
-and lower the same YATA transform to the 8-lane by 8-cycle task. No checked-in
-reference RTL is used by the NGen generation path.
+The timed graph already attaches configurable latency metadata to modular
+operators and inserts explicit delay nodes on shorter butterfly paths. The next
+milestone lowers the complete radix-8 plan through that graph, emits the delay
+registers and valid path, and composes those blocks with a transpose buffer for
+the 8-lane by 8-cycle task. No checked-in reference RTL is used by the NGen
+generation path.
