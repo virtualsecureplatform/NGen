@@ -1,7 +1,8 @@
 package ngen.cli
 
 import ngen.algebra.{Domains, Modulus, NttDomain, TransformShape}
-import ngen.rtl.{ProfileName, TransposeKind}
+import ngen.rtl.{ArchitectureKind, ProfileName, ReductionChoice, TransposeKind}
+import ngen.transform.DataOrder
 
 import scala.collection.mutable
 
@@ -17,7 +18,11 @@ final case class GeneratorConfig(
     output: Option[String],
     top: Option[String],
     profile: ProfileName,
+    architecture: ArchitectureKind,
+    reduction: ReductionChoice,
     transpose: TransposeKind,
+    inputOrder: DataOrder,
+    outputOrder: DataOrder,
     graph: Boolean,
     rtlGraph: Boolean
 ):
@@ -36,7 +41,7 @@ enum Command:
   case Help
 
 object Cli:
-  val Version = "0.1.0"
+  val Version = "0.2.0-dev"
 
   val usage: String =
     """NGen - A Generator of Streaming NTT Hardware
@@ -49,13 +54,18 @@ object Cli:
       |  -k <k>          log2 of the streaming width; defaults to n.
       |  -r <r>          log2 of the radix; defaults to the largest divisor of n <= k.
       |  -q <prime>      Field modulus for a custom domain (decimal or 0x hexadecimal).
-      |  -root <value>   Primitive N-th root for a custom domain.
-      |  -psi <value>    Optional primitive 2N-th root for a negacyclic transform.
+      |  -root <value>   Primitive N-th root for a custom domain; value may be auto.
+      |  -psi <value>    Optional primitive 2N-th root; use -root auto -psi auto for automatic negacyclic roots.
+      |  -base-case <n>  Stop an incomplete negacyclic NTT at blocks of size n.
       |  -o <file>       Output file; defaults to design.sv for RTL transforms.
       |  -top <name>     Override the generated top-level module name.
       |  -data-width <w> Element width for switchtranspose; defaults to 64.
       |  -profile <name> Pipeline profile: baseline (default) or f300.
+      |  -architecture <a> RTL architecture: auto (default), fully-parallel, or streamed.
+      |  -reduction <r>  Modular reduction: auto (default), barrett, or montgomery.
       |  -transpose <t>  Streaming transpose: indexed (default) or switch.
+      |  -input-order <o> Input stream order: natural (default) or bitreversed.
+      |  -output-order <o> Output stream order: natural (default) or bitreversed.
       |  -graph          Emit the transform-decomposition DOT graph.
       |  -rtlgraph       Emit the scheduled RTL DOT graph.
       |  -check          Run the mathematical round-trip check before generation.
@@ -94,14 +104,19 @@ object Cli:
     var k: Option[Int] = None
     var r: Option[Int] = None
     var q: Option[BigInt] = None
-    var root: Option[BigInt] = None
-    var psi: Option[BigInt] = None
+    var root: Option[String] = None
+    var psi: Option[String] = None
+    var baseCase: Option[Int] = None
     var check = false
     var output: Option[String] = None
     var top: Option[String] = None
     var dataWidth = 64
     var profile = ProfileName.Baseline
+    var architecture = ArchitectureKind.Auto
+    var reduction = ReductionChoice.Auto
     var transpose = TransposeKind.Indexed
+    var inputOrder = DataOrder.Natural
+    var outputOrder = DataOrder.Natural
     var graph = false
     var rtlGraph = false
     var terminal: Option[String] = None
@@ -113,13 +128,18 @@ object Cli:
         case "-k" => k = Some(requiredValue(args, "-k").toInt)
         case "-r" => r = Some(requiredValue(args, "-r").toInt)
         case "-q" => q = Some(integer(requiredValue(args, "-q")))
-        case "-root" => root = Some(integer(requiredValue(args, "-root")))
-        case "-psi" => psi = Some(integer(requiredValue(args, "-psi")))
+        case "-root" => root = Some(requiredValue(args, "-root"))
+        case "-psi" => psi = Some(requiredValue(args, "-psi"))
+        case "-base-case" => baseCase = Some(requiredValue(args, "-base-case").toInt)
         case "-o" => output = Some(requiredValue(args, "-o"))
         case "-top" => top = Some(requiredValue(args, "-top"))
         case "-data-width" => dataWidth = requiredValue(args, "-data-width").toInt
         case "-profile" => profile = ProfileName.parse(requiredValue(args, "-profile"))
+        case "-architecture" => architecture = ArchitectureKind.parse(requiredValue(args, "-architecture"))
+        case "-reduction" => reduction = ReductionChoice.parse(requiredValue(args, "-reduction"))
         case "-transpose" => transpose = TransposeKind.parse(requiredValue(args, "-transpose"))
+        case "-input-order" => inputOrder = DataOrder.parse(requiredValue(args, "-input-order"))
+        case "-output-order" => outputOrder = DataOrder.parse(requiredValue(args, "-output-order"))
         case "-graph" => graph = true
         case "-rtlgraph" => rtlGraph = true
         case "-check" => check = true
@@ -135,7 +155,7 @@ object Cli:
       case Some("presets") => Command.Presets
       case Some("version") => Command.Version
       case Some("switchtranspose") =>
-        require(preset.isEmpty && q.isEmpty && root.isEmpty && psi.isEmpty, "switchtranspose uses -n and -data-width, not a transform domain")
+        require(preset.isEmpty && q.isEmpty && root.isEmpty && psi.isEmpty && baseCase.isEmpty, "switchtranspose uses -n and -data-width, not a transform domain")
         val logSize = n.getOrElse(throw new IllegalArgumentException("switchtranspose requires -n"))
         require(logSize > 0 && logSize < 16)
         require(dataWidth > 0)
@@ -143,7 +163,7 @@ object Cli:
       case Some(transform @ ("ntt" | "intt" | "raintt" | "kyberpe")) =>
         val selected = preset match
           case Some(name) =>
-            require(n.isEmpty && q.isEmpty && root.isEmpty && psi.isEmpty, "a preset cannot be combined with -n, -q, -root, or -psi")
+            require(n.isEmpty && q.isEmpty && root.isEmpty && psi.isEmpty && baseCase.isEmpty, "a preset cannot be combined with custom-domain options")
             Domains.named(name).getOrElse(
               throw new IllegalArgumentException(s"unknown preset '$name'; expected ${Domains.all.map(_.name).mkString(", ")}")
             )
@@ -151,14 +171,25 @@ object Cli:
             val logSize = n.getOrElse(throw new IllegalArgumentException("-n is required without -preset"))
             require(logSize > 0 && logSize < 31, s"-n must be between 1 and 30, got $logSize")
             val modulus = Modulus(q.getOrElse(throw new IllegalArgumentException("-q is required without -preset")))
-            val nthRoot = root.getOrElse(throw new IllegalArgumentException("-root is required without -preset"))
+            require(modulus.q.isProbablePrime(80), s"-q must be prime, got ${modulus.q}")
+            val rootText = root.getOrElse(throw new IllegalArgumentException("-root is required without -preset"))
+            require(baseCase.isEmpty || psi.isEmpty, "incomplete transforms do not use -psi")
+            require(psi.forall(_.toLowerCase != "auto") || rootText.toLowerCase == "auto", "-psi auto requires -root auto")
+            val automaticPsi = psi.filter(_.toLowerCase == "auto").map { _ =>
+              require(logSize < 30, "automatic 2N-th root search requires n < 30")
+              modulus.findPowerOfTwoRoot(2 << logSize)
+            }
+            val normalizedPsi = psi.map(text => automaticPsi.getOrElse(integer(text)))
+            val nthRoot =
+              if rootText.toLowerCase == "auto" then automaticPsi.map(value => modulus.multiply(value, value)).getOrElse(modulus.findPowerOfTwoRoot(1 << logSize))
+              else integer(rootText)
             NttDomain(
               name = "custom",
               size = 1 << logSize,
               modulus = modulus,
               root = nthRoot,
-              shape = if psi.isDefined then TransformShape.Negacyclic else TransformShape.Cyclic,
-              twist = psi,
+              shape = baseCase.map(TransformShape.IncompleteNegacyclic.apply).getOrElse(if psi.isDefined then TransformShape.Negacyclic else TransformShape.Cyclic),
+              twist = normalizedPsi,
               description = "custom command-line NTT domain"
             )
 
@@ -177,7 +208,11 @@ object Cli:
             output,
             top,
             profile,
+            architecture,
+            reduction,
             transpose,
+            inputOrder,
+            outputOrder,
             graph,
             rtlGraph
           )

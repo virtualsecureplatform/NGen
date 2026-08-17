@@ -27,7 +27,7 @@ object ReferenceNtt:
         val twist = Vector.tabulate(domain.size)(i => domain.modulus.pow(psi, i))
         cyclicPlan(domain).eval(Diagonal(twist).eval(input.toVector, domain.modulus), domain.modulus)
       case TransformShape.IncompleteNegacyclic(_) =>
-        KyberNtt.forward(domain, input)
+        IncompleteNttPlan(domain, inverse = false).evaluate(input)
 
   def inverse(domain: NttDomain, input: Seq[BigInt]): Vector[BigInt] =
     require(input.size == domain.size)
@@ -39,4 +39,4 @@ object ReferenceNtt:
         val untwist = Vector.tabulate(domain.size)(i => domain.modulus.pow(psiInverse, i))
         Diagonal(untwist).eval(untwisted, domain.modulus)
       case TransformShape.IncompleteNegacyclic(_) =>
-        KyberNtt.inverse(domain, input)
+        IncompleteNttPlan(domain, inverse = true).evaluate(input)

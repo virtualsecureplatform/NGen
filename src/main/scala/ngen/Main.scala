@@ -8,8 +8,10 @@ import ngen.backend.{DesignMetadata, GraphSystemVerilog, TransformDot}
 import ngen.backend.HogeSystemVerilog
 import ngen.backend.KyberSystemVerilog
 import ngen.backend.SwitchTransposeSystemVerilog
+import ngen.backend.GenericStreamingNttSystemVerilog
 import ngen.rtl.SwitchTransposeSpec
-import ngen.rtl.{Architecture, GenericNttGraph, PipelineProfile, Port, PortDirection, ReductionKind, StreamingContract, ValueFormat}
+import ngen.rtl.{Architecture, ArchitectureKind, GenericNttGraph, PipelineProfile, Port, PortDirection, ReductionChoice, ReductionKind, StreamingContract, ValueFormat}
+import ngen.transform.{DataOrder, IncompleteNttPlan, NttPlan, StreamingNttPlan}
 
 import java.nio.file.{Files, Path}
 
@@ -27,6 +29,12 @@ object Main:
   ): Unit =
     val direction = config.direction.toString.toLowerCase
     val profile = config.profile.toString.toLowerCase
+    val architecture = config.domain.name match
+      case name if name.startsWith("yata") => "yata-microcoded-radix8"
+      case "hoge32" => "hoge-radix32"
+      case "hoge1024" => "hoge-streamed-radix32"
+      case "kyber256" => "kyber-pe1"
+      case _ => config.architecture.toString.toLowerCase
     val base = artifactBase(output)
     val json = s"""{
       |  "schema": "ngen-design-v1",
@@ -35,9 +43,13 @@ object Main:
       |  "modulus": "${config.domain.modulus.q}",
       |  "transform_size": ${config.domain.size},
       |  "direction": "$direction",
+      |  "input_order": "${config.inputOrder.toString.toLowerCase}",
+      |  "output_order": "${config.outputOrder.toString.toLowerCase}",
       |  "streaming_width": ${config.streamingWidth},
       |  "radix": ${config.radix},
       |  "profile": "$profile",
+      |  "architecture": "$architecture",
+      |  "reduction_request": "${config.reduction.toString.toLowerCase}",
       |  "transpose": "${config.transpose.toString.toLowerCase}",
       |  "reduction": "$reduction",
       |  "latency": $latency,
@@ -73,6 +85,11 @@ object Main:
     println("Mathematical NTT/INTT round-trip passed.")
 
   private def emit(config: GeneratorConfig): Boolean =
+    if config.domain.name != "custom" then
+      require(config.architecture == ArchitectureKind.Auto, "preset backends select their architecture automatically")
+      require(config.reduction == ReductionChoice.Auto, "preset backends select their field reduction automatically")
+      require(config.inputOrder == DataOrder.Natural && config.outputOrder == DataOrder.Natural,
+        "preset backends currently expose natural-order streams only")
     if config.direction == Direction.Both then
       if config.domain.name == "kyber256" then
         require(config.streamingLog == 0 && config.radixLog == 1, "kyberpe requires -k 0 -r 1")
@@ -127,34 +144,63 @@ object Main:
       true
     else if config.domain.name == "custom" then
       require(config.transpose == ngen.rtl.TransposeKind.Indexed, "custom-prime v0.1 RTL supports indexed transpose only")
-      require(config.streamingLog == config.domain.logSize, "custom-prime RTL in v0.1 requires -k equal to -n")
       require(config.radixLog == 1, "custom-prime RTL in v0.1 requires -r 1")
       val profile = PipelineProfile.named(config.profile)
       val inverse = config.direction == Direction.Inverse
-      val graph = GenericNttGraph.build(config.domain, inverse, profile)
       val output = Path.of(config.output.getOrElse("design.sv"))
       Option(output.getParent).foreach(Files.createDirectories(_))
       val top = config.top.getOrElse("main")
-      Files.writeString(output, GraphSystemVerilog.emit(graph, config.domain, top))
-      val architecture = Architecture(
-        s"custom-${if inverse then "intt" else "ntt"}",
-        Vector(
-          Port("clock", PortDirection.Input, ValueFormat.Valid),
-          Port("reset", PortDirection.Input, ValueFormat.Valid),
-          Port("next", PortDirection.Input, ValueFormat.Valid)
-        ),
-        Vector(graph),
-        Vector.empty,
-        Vector.empty,
-        StreamingContract(config.domain.size, config.domain.size, 1, 1, graph.latency, 1),
-        ReductionKind.Barrett,
-        profile
-      )
-      val metadata = DesignMetadata(Cli.Version, config.domain, architecture, if inverse then "inverse" else "forward", 2, output.toString)
+      val fullyParallelCompatible = config.streamingLog == config.domain.logSize &&
+        config.inputOrder == DataOrder.Natural && config.outputOrder == DataOrder.Natural &&
+        !config.domain.shape.isInstanceOf[ngen.algebra.TransformShape.IncompleteNegacyclic] &&
+        config.reduction != ReductionChoice.Montgomery
+      val reductionKind = config.reduction match
+        case ReductionChoice.Auto | ReductionChoice.Barrett => ReductionKind.Barrett
+        case ReductionChoice.Montgomery => ReductionKind.Montgomery
+      val useFullyParallel = config.architecture match
+        case ArchitectureKind.Auto => fullyParallelCompatible
+        case ArchitectureKind.FullyParallel =>
+          require(fullyParallelCompatible, "fully-parallel custom RTL requires K=N, natural stream order, and a complete transform")
+          true
+        case ArchitectureKind.Streamed => false
+      val architecture =
+        if useFullyParallel then
+          val graph = GenericNttGraph.build(config.domain, inverse, profile)
+          Files.writeString(output, GraphSystemVerilog.emit(graph, config.domain, top))
+          Architecture(
+            s"custom-${if inverse then "intt" else "ntt"}-fully-parallel",
+            Vector(Port("clock", PortDirection.Input, ValueFormat.Valid), Port("reset", PortDirection.Input, ValueFormat.Valid), Port("next", PortDirection.Input, ValueFormat.Valid)),
+            Vector(graph), Vector.empty, Vector.empty,
+            StreamingContract(config.domain.size, config.domain.size, 1, 1, graph.latency, 1),
+            ReductionKind.Barrett, profile
+          )
+        else
+          val plan: StreamingNttPlan = config.domain.shape match
+            case ngen.algebra.TransformShape.IncompleteNegacyclic(_) =>
+              require(config.inputOrder == DataOrder.Natural && config.outputOrder == DataOrder.Natural,
+                "incomplete transforms currently expose natural-order streams only")
+              IncompleteNttPlan(config.domain, inverse)
+            case _ => NttPlan.radix2(config.domain, inverse, config.inputOrder, config.outputOrder)
+          val schedule = GenericStreamingNttSystemVerilog.schedule(plan, config.streamingWidth, config.profile)
+          Files.writeString(output, GenericStreamingNttSystemVerilog.emit(plan, config.streamingWidth, top, config.profile, reductionKind))
+          Architecture(
+            s"custom-${if inverse then "intt" else "ntt"}-streamed-radix2",
+            Vector(Port("clock", PortDirection.Input, ValueFormat.Valid), Port("reset", PortDirection.Input, ValueFormat.Valid), Port("next", PortDirection.Input, ValueFormat.Valid), Port("ready", PortDirection.Output, ValueFormat.Valid)),
+            Vector.empty,
+            Vector(ngen.rtl.MemorySpec("work", config.domain.size, ValueFormat.unsigned(config.domain.modulus.bitWidth), readLatency = 0)),
+            Vector(ngen.rtl.CounterSpec("capture", schedule.inputCycles), ngen.rtl.CounterSpec("bundle", math.max(1, schedule.bundles.size)), ngen.rtl.CounterSpec("output", schedule.outputCycles)),
+            StreamingContract(config.domain.size, config.streamingWidth, schedule.inputCycles, schedule.outputCycles, schedule.latency, schedule.initiationInterval),
+            reductionKind, profile
+          )
+      val metadata = DesignMetadata(Cli.Version, config.domain, architecture, if inverse then "inverse" else "forward", 2, output.toString,
+        config.inputOrder.toString.toLowerCase, config.outputOrder.toString.toLowerCase)
       val base = output.toString.stripSuffix(".sv").stripSuffix(".v")
       Files.writeString(Path.of(base + ".json"), metadata.toJson)
       if config.graph then Files.writeString(Path.of(base + ".graph.gv"), TransformDot.emit(config.domain, inverse, config.radixLog))
-      if config.rtlGraph then Files.writeString(Path.of(base + ".rtl.gv"), graph.toDot)
+      if config.rtlGraph then
+        val graphText = if architecture.datapaths.nonEmpty then architecture.datapaths.head.toDot
+        else s"digraph rtl { input -> capture -> radix2_bundles -> output; }\n"
+        Files.writeString(Path.of(base + ".rtl.gv"), graphText)
       println(s"Written design in $output.")
       println(s"Written metadata in ${base}.json.")
       true

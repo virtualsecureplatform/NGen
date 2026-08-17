@@ -58,3 +58,20 @@ class CliSpec extends AnyFunSuite:
   test("switch transpose has an SGen-style terminal command"):
     val command = Cli.parse(Seq("-n", "3", "-data-width", "16", "-o", "transpose.sv", "switchtranspose"))
     assert(command == Command.SwitchTranspose(3, 16, Some("transpose.sv"), None))
+
+  test("custom incomplete domains expose a configurable base case"):
+    val command = Cli.parse(Seq("-n", "3", "-k", "1", "-r", "1", "-q", "17", "-root", "9", "-base-case", "2", "ntt"))
+    command match
+      case Command.Generate(config) => assert(config.domain.shape == TransformShape.IncompleteNegacyclic(2))
+      case other => fail(s"expected generation command, got $other")
+
+  test("custom domains can discover cyclic and negacyclic roots"):
+    val cyclic = Cli.parse(Seq("-n", "3", "-q", "17", "-root", "auto", "ntt")) match
+      case Command.Generate(config) => config.domain
+      case other => fail(s"expected generation command, got $other")
+    assert(cyclic.modulus.hasExactPowerOfTwoOrder(cyclic.root, 8))
+    val negacyclic = Cli.parse(Seq("-n", "3", "-q", "97", "-root", "auto", "-psi", "auto", "ntt")) match
+      case Command.Generate(config) => config.domain
+      case other => fail(s"expected generation command, got $other")
+    assert(negacyclic.shape == TransformShape.Negacyclic)
+    assert(negacyclic.modulus.pow(negacyclic.twist.get, 8) == 96)

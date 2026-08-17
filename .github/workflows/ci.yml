@@ -19,6 +19,8 @@ jobs:
         run: sbt test assembly
       - name: Generated RTL simulation
         run: scripts/test_generated_rtl.sh
+      - name: Generic streamed NTT matrix
+        run: scripts/test_streamed_ntt.py
       - name: Switch transpose simulation
         run: scripts/test_switch_transpose.sh
       - name: Yosys smoke qualification

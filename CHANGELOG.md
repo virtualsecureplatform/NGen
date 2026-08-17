@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.2.0 (development)
+
+- Added canonical complete and incomplete NTT plans with algebraically checked
+  radix-fusion planning.
+- Added generic streamed radix-2 RTL for arbitrary power-of-two `N` and `K`.
+- Added natural/bit-reversed stream ordering, baseline/f300 scheduling, and a
+  `ready` transaction contract.
+- Added selectable Barrett and Montgomery constant multiplication.
+- Added automatic exact-order root discovery and configurable incomplete base
+  cases beyond Kyber's fixed geometry.
+- Added randomized generated-RTL and synthesis regression coverage.
+
 ## 0.1.0
 
 - Added SGen-style NTT/INTT/RAINTT/Kyber PE generation.

@@ -15,6 +15,9 @@ synthesize() {
 bash ngen.bat -n 3 -k 3 -r 1 -q 17 -root 9 -o "${run_dir}/generic.sv" ntt
 synthesize "${run_dir}/generic.sv" main
 
+bash ngen.bat -n 4 -k 2 -r 1 -q 12289 -root 4134 -architecture streamed -reduction montgomery -o "${run_dir}/generic-streamed.sv" ntt
+synthesize "${run_dir}/generic-streamed.sv" main
+
 bash ngen.bat -preset yata8 -k 3 -r 3 -o "${run_dir}/yata.sv" raintt
 synthesize "${run_dir}/yata.sv" SmallYata8RainttP27Rtl
 

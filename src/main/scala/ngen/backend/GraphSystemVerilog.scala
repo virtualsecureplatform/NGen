@@ -116,10 +116,10 @@ object GraphSystemVerilog:
        |    reg [${3 * width - 1}:0] quotient_product;
        |    reg signed [${3 * width}:0] remainder;
        |    begin
-       |      product = a * b;
-       |      scaled = product * BARRETT_MU;
+       |      product = {{$width{1'b0}}, a} * {{$width{1'b0}}, b};
+       |      scaled = {{${2 * width}{1'b0}}, product} * {{${2 * width}{1'b0}}, BARRETT_MU};
        |      quotient = scaled[${4 * width - 1}:${2 * width}];
-       |      quotient_product = quotient * MODULUS;
+       |      quotient_product = {{$width{1'b0}}, quotient} * {{${2 * width}{1'b0}}, MODULUS};
        |      remainder = $$signed({${width + 1}'d0, product}) - $$signed({1'b0, quotient_product});
        |      if (remainder < 0) remainder = remainder + MODULUS_REMAINDER;
        |      if (remainder >= MODULUS_REMAINDER) remainder = remainder - MODULUS_REMAINDER;

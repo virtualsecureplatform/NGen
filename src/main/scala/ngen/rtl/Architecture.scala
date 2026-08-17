@@ -24,7 +24,27 @@ object PipelineProfile:
   def named(name: ProfileName): PipelineProfile = if name == ProfileName.Baseline then Baseline else F300
 
 enum ReductionKind:
-  case YataSredc, Goldilocks, KyberMontgomery, Barrett
+  case YataSredc, Goldilocks, KyberMontgomery, Barrett, Montgomery
+
+enum ReductionChoice:
+  case Auto, Barrett, Montgomery
+
+object ReductionChoice:
+  def parse(value: String): ReductionChoice = value.toLowerCase match
+    case "auto" => ReductionChoice.Auto
+    case "barrett" => ReductionChoice.Barrett
+    case "montgomery" => ReductionChoice.Montgomery
+    case other => throw new IllegalArgumentException(s"unknown reduction '$other'; expected auto, barrett, or montgomery")
+
+enum ArchitectureKind:
+  case Auto, FullyParallel, Streamed
+
+object ArchitectureKind:
+  def parse(value: String): ArchitectureKind = value.toLowerCase.replace("-", "") match
+    case "auto" => ArchitectureKind.Auto
+    case "fullyparallel" | "parallel" => ArchitectureKind.FullyParallel
+    case "streamed" | "streaming" => ArchitectureKind.Streamed
+    case other => throw new IllegalArgumentException(s"unknown architecture '$other'; expected auto, fully-parallel, or streamed")
 
 enum TransposeKind:
   case Indexed, Switch

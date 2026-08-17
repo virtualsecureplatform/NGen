@@ -9,7 +9,9 @@ final case class DesignMetadata(
     architecture: Architecture,
     direction: String,
     radix: Int,
-    outputFile: String
+    outputFile: String,
+    inputOrder: String = "natural",
+    outputOrder: String = "natural"
 ):
   private def quote(value: String): String =
     "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n") + "\""
@@ -25,6 +27,9 @@ final case class DesignMetadata(
        |  "modulus": ${quote(domain.modulus.q.toString)},
        |  "transform_size": ${domain.size},
        |  "direction": ${quote(direction)},
+       |  "architecture": ${quote(architecture.name)},
+       |  "input_order": ${quote(inputOrder)},
+       |  "output_order": ${quote(outputOrder)},
        |  "streaming_width": ${architecture.contract.streamingWidth},
        |  "radix": $radix,
        |  "profile": ${quote(profile)},

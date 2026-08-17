@@ -59,3 +59,8 @@ class ReferenceNttSpec extends AnyFunSuite:
       val transformed = ReferenceNtt.forward(Domains.Kyber256, input)
       assert(ReferenceNtt.inverse(Domains.Kyber256, transformed) == input.map(field.normalize))
     }
+
+  test("generic incomplete reference agrees with the legacy Kyber model"):
+    val input = Vector.tabulate(256)(i => BigInt(i * 17 - 300))
+    assert(ReferenceNtt.forward(Domains.Kyber256, input) == KyberNtt.forward(Domains.Kyber256, input))
+    assert(ReferenceNtt.inverse(Domains.Kyber256, input) == KyberNtt.inverse(Domains.Kyber256, input))

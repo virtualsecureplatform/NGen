@@ -19,3 +19,8 @@ class ModulusSpec extends AnyFunSuite:
   test("exact power-of-two order distinguishes proper roots"):
     assert(field.hasExactPowerOfTwoOrder(9, 8))
     assert(!field.hasExactPowerOfTwoOrder(16, 8))
+
+  test("automatic root discovery returns the requested order"):
+    val larger = Modulus(97)
+    val root = larger.findPowerOfTwoRoot(16)
+    assert(larger.hasExactPowerOfTwoOrder(root, 16))
