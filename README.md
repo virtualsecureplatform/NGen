@@ -5,6 +5,10 @@ SGen-style command line lowers finite-field transform specifications through a
 latency-aware RTL representation and emits synthesizable SystemVerilog,
 metadata, and optional graphs.
 
+Acyclic datapaths use `TimedGraph`; stateful streaming designs use the shared
+`MicroProgram` IR, which preserves dependency order while packing independent
+operations into the configured hardware width.
+
 ## Supported designs
 
 | Preset | Configuration | Generated interface |

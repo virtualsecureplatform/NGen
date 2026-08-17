@@ -2,6 +2,7 @@ package ngen.backend
 
 import ngen.algebra.Domains
 import ngen.transform.KyberNtt
+import ngen.rtl.{IndexedOperation, MicroProgram}
 
 object KyberSystemVerilog:
   val ForwardCycles = 896
@@ -11,7 +12,8 @@ object KyberSystemVerilog:
   private def montgomeryConstant(value: Int): Int = ((BigInt(value) * (BigInt(1) << 16)) % 3329).toInt
   private def lines(values: Seq[String], spaces: Int): String = values.map(" " * spaces + _).mkString("\n")
 
-  private final case class MicroOp(kind: Int, left: Int, right: Int, constant: Int)
+  private final case class MicroOp(kind: Int, left: Int, right: Int, constant: Int) extends IndexedOperation:
+    override val indices: Set[Int] = if kind == 3 then Set(left) else Set(left, right)
 
   private def forwardProgram: Vector[MicroOp] =
     var constantIndex = 1
@@ -43,8 +45,8 @@ object KyberSystemVerilog:
 
   def emit(top: String = "KyberHPM1PE"): String =
     require(top.matches("[A-Za-z_][A-Za-z0-9_$]*"))
-    val forward = forwardProgram
-    val inverse = inverseProgram
+    val forward = MicroProgram.schedule(forwardProgram, 1).bundles.flatten
+    val inverse = MicroProgram.schedule(inverseProgram, 1).bundles.flatten
     val forwardRom = forward.zipWithIndex.map { case (op, index) =>
       s"f_kind[$index]=2'd${op.kind}; f_left[$index]=8'd${op.left}; f_right[$index]=8'd${op.right}; f_constant[$index]=12'd${montgomeryConstant(op.constant)};"
     }

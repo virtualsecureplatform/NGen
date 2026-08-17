@@ -2,9 +2,10 @@ package ngen.backend
 
 import ngen.arithmetic.HogeField
 import ngen.rtl.ProfileName
+import ngen.rtl.{IndexedOperation, MicroProgram}
 
 object HogeSystemVerilog:
-  private sealed trait MicroOp:
+  private sealed trait MicroOp extends IndexedOperation:
     def indices: Set[Int]
   private final case class Butterfly(left: Int, right: Int) extends MicroOp:
     override val indices = Set(left, right)
@@ -88,21 +89,6 @@ object HogeSystemVerilog:
       result :+= Multiply(index, inverseSize)
     result
 
-  private def bundle(program: Vector[MicroOp], width: Int = 32): Vector[Vector[MicroOp]] =
-    val groups = scala.collection.mutable.ArrayBuffer.empty[Vector[MicroOp]]
-    var current = Vector.empty[MicroOp]
-    var used = Set.empty[Int]
-    program.foreach { operation =>
-      if current.size == width || operation.indices.exists(used) then
-        groups += current
-        current = Vector.empty
-        used = Set.empty
-      current :+= operation
-      used ++= operation.indices
-    }
-    if current.nonEmpty then groups += current
-    groups.toVector
-
   private def inverseButterfly(offset: Int, size: Int, radixLog: Int): Vector[String] =
     if radixLog == 0 then Vector.empty
     else
@@ -172,13 +158,13 @@ object HogeSystemVerilog:
   def emitStreamingIntt(top: String = "INTTWrap", profile: ProfileName = ProfileName.Baseline): String = emitStreaming(top, inverse = true, profile)
   def emitStreamingNtt(top: String = "NTTWrap", profile: ProfileName = ProfileName.Baseline): String = emitStreaming(top, inverse = false, profile)
   def streamingBundles(inverse: Boolean, profile: ProfileName = ProfileName.Baseline): Int =
-    bundle(if inverse then inverseProgram(10,5) else forwardProgram(10,5)).size * (if profile == ProfileName.F300 then 2 else 1)
+    MicroProgram.schedule(if inverse then inverseProgram(10,5) else forwardProgram(10,5), 32).length * (if profile == ProfileName.F300 then 2 else 1)
 
   private def emitStreaming(top: String, inverse: Boolean, profile: ProfileName): String =
     val size = 1024
     val lanes = 32
     val cycles = 32
-    val groups = bundle(if inverse then inverseProgram(10,5) else forwardProgram(10,5))
+    val groups = MicroProgram.schedule(if inverse then inverseProgram(10,5) else forwardProgram(10,5), lanes).bundles
     require(groups.size < 3990, s"HOGE program exceeds watchdog: ${groups.size} bundles")
     val inputWidth = if inverse then 32 else 64
     val outputWidth = 64

@@ -2,9 +2,10 @@ package ngen.backend
 
 import ngen.arithmetic.{YataField, YataTables}
 import ngen.rtl.ProfileName
+import ngen.rtl.{IndexedOperation, MicroProgram}
 
 object YataMicrocodedSystemVerilog:
-  private final case class MicroOp(kind: Int, left: Int, right: Int = 0, constant: Long = 0, radixLog: Int = 0, number: Int = 0):
+  private final case class MicroOp(kind: Int, left: Int, right: Int = 0, constant: Long = 0, radixLog: Int = 0, number: Int = 0) extends IndexedOperation:
     val indices: Set[Int] = if kind == 4 || kind == 10 then Set(left) else Set(left, right)
 
   private def reverse3(value: Int): Int = ((value & 1) << 2) | (value & 2) | ((value & 4) >> 2)
@@ -78,26 +79,14 @@ object YataMicrocodedSystemVerilog:
     for index <- 0 until size do result :+= MicroOp(10, index, constant = tables.nttTwist(index))
     result
 
-  private def bundle(program: Vector[MicroOp], width: Int): Vector[Vector[MicroOp]] =
-    val groups = scala.collection.mutable.ArrayBuffer.empty[Vector[MicroOp]]
-    var current = Vector.empty[MicroOp]
-    var used = Set.empty[Int]
-    program.foreach { op =>
-      if current.size == width || op.indices.exists(used) then
-        groups += current; current = Vector.empty; used = Set.empty
-      current :+= op; used ++= op.indices
-    }
-    if current.nonEmpty then groups += current
-    groups.toVector
-
   private def lit(value: Long): String = if value < 0 then s"-27'sd${-value}" else s"27'sd$value"
   private def lines(values: Seq[String], indent: Int): String = values.map(" " * indent + _).mkString("\n")
 
   def scheduleLengths(logSize: Int, streamingLog: Int, profile: ProfileName): (Int, Int) =
     val tables = YataField.tables(logSize)
     val factor = if profile == ProfileName.F300 then 2 else 1
-    (bundle(inverseProgram(logSize, tables), 1 << streamingLog).size * factor,
-      bundle(forwardProgram(logSize, tables), 1 << streamingLog).size * factor)
+    (MicroProgram.schedule(inverseProgram(logSize, tables), 1 << streamingLog).length * factor,
+      MicroProgram.schedule(forwardProgram(logSize, tables), 1 << streamingLog).length * factor)
 
   def emit(logSize: Int, streamingLog: Int, profile: ProfileName, top: String): String =
     val size = 1 << logSize
@@ -106,8 +95,8 @@ object YataMicrocodedSystemVerilog:
     require((logSize == 3 && streamingLog == 3) || (logSize == 6 && streamingLog == 3) || (logSize == 9 && streamingLog == 6))
     val cycles = size / lanes
     val tables = YataField.tables(logSize)
-    val inverse = bundle(inverseProgram(logSize, tables), lanes)
-    val forward = bundle(forwardProgram(logSize, tables), lanes)
+    val inverse = MicroProgram.schedule(inverseProgram(logSize, tables), lanes).bundles
+    val forward = MicroProgram.schedule(forwardProgram(logSize, tables), lanes).bundles
     require(inverse.size * (if profile == ProfileName.F300 then 2 else 1) < 1900)
     require(forward.size * (if profile == ProfileName.F300 then 2 else 1) < 1900)
     def w(index: Int) = s"w$index"
