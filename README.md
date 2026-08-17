@@ -165,6 +165,17 @@ lowering and prime sizes for Bluestein lowering. These general-size plans are
 executable mathematical oracles; their RTL lowering is not yet exposed by the
 CLI.
 
+Non-power-of-two transforms use `generalntt`. Composite sizes lower through
+recursive mixed-radix Cooley–Tukey stages. Prime sizes lower through Bluestein;
+the caller supplies a power-of-two convolution root whose order equals the
+next power of two covering `2*size-1`:
+
+```bash
+./ngen.bat -size 6 -q 13 -root 4 -o ntt6.sv generalntt
+./ngen.bat -size 5 -q 241 -root 87 -convolution-root 44 \
+  -o ntt5.sv generalntt
+```
+
 Classical Fermat Number Transforms use `-fermat 0` through `-fermat 4`.
 NGen derives the modulus, transform root, and shift-only twiddle exponents.
 Power-of-two-base generalized Fermat primes use `-fermat-base <a>

@@ -1,6 +1,7 @@
 package ngen.backend
 
 import ngen.algebra.NttDomain
+import ngen.algebra.Modulus
 import ngen.arithmetic.BarrettField
 import ngen.rtl.*
 
@@ -10,13 +11,15 @@ object GraphSystemVerilog:
     if format.width == 1 then signed else s"$signed[${format.width - 1}:0] "
 
   def emit(graph: TimedGraph, domain: NttDomain, top: String = "main"): String =
+    emit(graph,domain.modulus,domain.size,top)
+
+  def emit(graph: TimedGraph, field: Modulus, size: Int, top: String): String =
     require(top.matches("[A-Za-z_][A-Za-z0-9_$]*"), s"invalid SystemVerilog module name: $top")
-    val field = domain.modulus
     val barrett = BarrettField(field)
     val width = field.bitWidth
     val inputs = graph.nodes.collect { case Node(signal, InputOperator(port, format), _) => (signal, port, format) }
-    require(inputs.map(_._2).sorted == Vector.tabulate(domain.size)(i => s"i$i").sorted, "generic NTT graph must expose i0..iN-1")
-    require(graph.outputs.size == domain.size)
+    require(inputs.map(_._2).sorted == Vector.tabulate(size)(i => s"i$i").sorted, "generic NTT graph must expose i0..iN-1")
+    require(graph.outputs.size == size)
 
     val nodeById = graph.nodes.map(node => node.signal.id -> node).toMap
     def reference(signal: Signal): String = nodeById(signal.id).operator match

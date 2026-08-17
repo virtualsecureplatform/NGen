@@ -2,7 +2,7 @@ package ngen.cli
 
 import ngen.algebra.{Domains, Modulus, NttDomain, TransformShape}
 import ngen.rtl.{ArchitectureKind, ProfileName, ReductionChoice, StreamProtocol, TransposeKind}
-import ngen.transform.{DataOrder, RnsBasis}
+import ngen.transform.{DataOrder, GeneralNttDomain, GeneralNttPlan, RnsBasis}
 import ngen.arithmetic.{FermatField, GeneralizedFermatField}
 
 import scala.collection.mutable
@@ -42,6 +42,7 @@ enum Command:
   case SwitchTranspose(logSize: Int, dataWidth: Int, output: Option[String], top: Option[String])
   case ButterflyPipeline(modulus: Modulus, reduction: ReductionChoice, output: Option[String], top: Option[String])
   case RnsPolynomial(basis: RnsBasis, emitCrt: Boolean, output: Option[String], top: Option[String])
+  case GeneralNtt(plan: GeneralNttPlan, output: Option[String], top: Option[String])
   case Presets
   case Version
   case Help
@@ -57,6 +58,8 @@ object Cli:
       |Options:
       |  -preset <name>  Use yata8, yata512, hoge1024, or kyber256 conventions.
       |  -n <n>          log2 of the transform size (required without a preset).
+      |  -size <n>       Exact non-power-of-two size for generalntt.
+      |  -convolution-root <r> Power-of-two root used by Bluestein convolution.
       |  -k <k>          log2 of the streaming width; defaults to n.
       |  -r <r>          log2 of the radix; custom domains default to radix 2.
       |  -pe <count>     Reusable butterfly PE count; defaults to max(1, K/2).
@@ -94,6 +97,7 @@ object Cli:
       |  switchtranspose Generate a HOGE-style recursive switch transpose.
       |  butterflypipeline Generate a tagged three-stage modular butterfly pipeline.
       |  rnspolymul      Generate two NTTs, pointwise multiply, and INTT per RNS prime.
+      |  generalntt      Generate a staged mixed-radix or Bluestein transform.
       |  presets         List built-in field/domain presets.
       |  version         Print the NGen version.
       |
@@ -118,6 +122,8 @@ object Cli:
     val args = mutable.Queue.from(rawArgs)
     var preset: Option[String] = None
     var n: Option[Int] = None
+    var exactSize: Option[Int] = None
+    var convolutionRoot: Option[BigInt] = None
     var k: Option[Int] = None
     var r: Option[Int] = None
     var peCount: Option[Int] = None
@@ -151,6 +157,8 @@ object Cli:
       args.dequeue() match
         case "-preset" => preset = Some(requiredValue(args, "-preset").toLowerCase)
         case "-n" => n = Some(requiredValue(args, "-n").toInt)
+        case "-size" => exactSize = Some(requiredValue(args, "-size").toInt)
+        case "-convolution-root" => convolutionRoot = Some(integer(requiredValue(args, "-convolution-root")))
         case "-k" => k = Some(requiredValue(args, "-k").toInt)
         case "-r" => r = Some(requiredValue(args, "-r").toInt)
         case "-pe" => peCount = Some(requiredValue(args, "-pe").toInt)
@@ -180,7 +188,7 @@ object Cli:
         case "-check" => check = true
         case "-nologo" => ()
         case "-h" | "--help" | "help" => terminal = Some("help")
-        case value @ ("ntt" | "intt" | "raintt" | "kyberpe" | "switchtranspose" | "butterflypipeline" | "rnspolymul" | "presets" | "version") =>
+        case value @ ("ntt" | "intt" | "raintt" | "kyberpe" | "switchtranspose" | "butterflypipeline" | "rnspolymul" | "generalntt" | "presets" | "version") =>
           require(terminal.isEmpty, s"multiple transforms specified: ${terminal.get} and $value")
           terminal = Some(value)
         case unknown => throw new IllegalArgumentException(s"unknown argument: $unknown")
@@ -208,6 +216,11 @@ object Cli:
         require(moduli.nonEmpty && moduli.size == roots.size && roots.size == twists.size, "RNS parameter vectors must have equal nonzero length")
         val domains = moduli.indices.map(index => NttDomain(s"rns$index",1 << logSize,Modulus(moduli(index)),roots(index),TransformShape.Negacyclic,Some(twists(index)))).toVector
         Command.RnsPolynomial(RnsBasis(domains),rnsCrt,output,top)
+      case Some("generalntt") =>
+        val size=exactSize.getOrElse(throw new IllegalArgumentException("generalntt requires -size"))
+        val modulus=Modulus(q.getOrElse(throw new IllegalArgumentException("generalntt requires -q")))
+        val nthRoot=root.map(integer).getOrElse(throw new IllegalArgumentException("generalntt requires -root"))
+        Command.GeneralNtt(GeneralNttPlan(GeneralNttDomain("general",size,modulus,nthRoot,convolutionRoot),inverse=false),output,top)
       case Some(transform @ ("ntt" | "intt" | "raintt" | "kyberpe")) =>
         val selected = preset match
           case Some(name) =>

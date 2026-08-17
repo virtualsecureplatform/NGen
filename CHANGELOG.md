@@ -28,6 +28,8 @@
   domains with shift/add twiddle pipelines.
 - Added generated complete-transform RNS polynomial multiplication with
   optional CRT reconstruction outputs.
+- Added generated recursive mixed-radix and padded Bluestein RTL for
+  non-power-of-two transform sizes.
 
 ## 0.1.0
 

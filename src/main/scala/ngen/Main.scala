@@ -12,6 +12,7 @@ import ngen.backend.PeStreamingNttSystemVerilog
 import ngen.backend.GenericSwitchTransposeWrapper
 import ngen.backend.PipelinedButterflySystemVerilog
 import ngen.backend.RnsPolynomialMultiplierSystemVerilog
+import ngen.rtl.GeneralNttGraph
 import ngen.rtl.SwitchTransposeSpec
 import ngen.rtl.{Architecture, ArchitectureKind, GenericNttGraph, PeNttSchedule, PipelineProfile, Port, PortDirection, ReductionChoice, ReductionKind, StreamProtocol, StreamingContract, ValueFormat}
 import ngen.transform.{DataOrder, IncompleteNttPlan, NttPlan, StreamingNttPlan, SwitchBoundaryPlan}
@@ -270,6 +271,11 @@ object Main:
           Option(output.getParent).foreach(Files.createDirectories(_))
           Files.writeString(output,RnsPolynomialMultiplierSystemVerilog.emit(basis,topName.getOrElse("RnsPolynomialMultiplier"),emitCrt))
           println(s"Written RNS polynomial multiplier in $output.")
+        case Command.GeneralNtt(plan, outputName, topName) =>
+          val output=Path.of(outputName.getOrElse("general-ntt.sv"));Option(output.getParent).foreach(Files.createDirectories(_))
+          val graph=GeneralNttGraph.build(plan,PipelineProfile.Baseline)
+          Files.writeString(output,GraphSystemVerilog.emit(graph,plan.domain.modulus,plan.domain.size,topName.getOrElse("GeneralNtt")))
+          println(s"Written ${plan.algorithm.toString.toLowerCase} NTT in $output.")
         case Command.Generate(config) =>
           printPlan(config)
           if config.check then check(config)

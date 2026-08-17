@@ -5,7 +5,7 @@ import ngen.algebra.Modulus
 enum GeneralNttAlgorithm:
   case MixedRadix, Bluestein
 
-final case class GeneralNttDomain(name: String, size: Int, modulus: Modulus, root: BigInt):
+final case class GeneralNttDomain(name: String, size: Int, modulus: Modulus, root: BigInt, convolutionRoot: Option[BigInt] = None):
   require(size >= 2)
   val normalizedRoot: BigInt = modulus.normalize(root)
 
@@ -22,10 +22,12 @@ final case class GeneralNttDomain(name: String, size: Int, modulus: Modulus, roo
     result.toVector
 
   val factors: Vector[Int] = primeFactors(size)
+  val convolutionSize: Int = Integer.highestOneBit(2 * size - 2) << 1
 
   def validate(): Unit =
     require(modulus.pow(normalizedRoot, size) == 1, s"root does not have order dividing $size")
     factors.distinct.foreach(factor => require(modulus.pow(normalizedRoot, size / factor) != 1, s"root does not have exact order $size"))
+    convolutionRoot.foreach(root => require(modulus.hasExactPowerOfTwoOrder(root,convolutionSize),s"convolution root must have exact order $convolutionSize"))
 
 final case class GeneralNttPlan(domain: GeneralNttDomain, inverse: Boolean, algorithm: GeneralNttAlgorithm):
   domain.validate()

@@ -33,6 +33,12 @@ synthesize "${run_dir}/fermat.sv" main
 bash ngen.bat -n 3 -rns-q 17,97 -rns-root 9,64 -rns-psi 3,8 -o "${run_dir}/rns.sv" -top RnsPolynomialMultiplier rnspolymul
 synthesize "${run_dir}/rns.sv" RnsPolynomialMultiplier
 
+bash ngen.bat -size 6 -q 13 -root 4 -o "${run_dir}/mixed.sv" generalntt
+synthesize "${run_dir}/mixed.sv" GeneralNtt
+
+bash ngen.bat -size 5 -q 241 -root 87 -convolution-root 44 -o "${run_dir}/bluestein.sv" generalntt
+synthesize "${run_dir}/bluestein.sv" GeneralNtt
+
 bash ngen.bat -preset yata8 -k 3 -r 3 -o "${run_dir}/yata.sv" raintt
 synthesize "${run_dir}/yata.sv" SmallYata8RainttP27Rtl
 
