@@ -33,6 +33,7 @@ final case class DesignMetadata(
        |  "initiation_interval": ${architecture.contract.initiationInterval},
        |  "input_cycles": ${architecture.contract.inputCycles},
        |  "output_cycles": ${architecture.contract.outputCycles},
+       |  "dependencies": [],
        |  "output_file": ${quote(outputFile)}
        |}
        |""".stripMargin

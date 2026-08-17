@@ -41,11 +41,12 @@ object Main:
       |  "initiation_interval": $initiationInterval,
       |  "input_cycles": $inputCycles,
       |  "output_cycles": $outputCycles,
+      |  "dependencies": [],
       |  "output_file": "${output.toString.replace("\\", "\\\\").replace("\"", "\\\"")}"
       |}
       |""".stripMargin
     Files.writeString(Path.of(base + ".json"), json)
-    if config.graph then Files.writeString(Path.of(base + ".graph.gv"), TransformDot.emit(config.domain, config.direction == Direction.Inverse))
+    if config.graph then Files.writeString(Path.of(base + ".graph.gv"), TransformDot.emit(config.domain, config.direction == Direction.Inverse, config.radixLog))
     if config.rtlGraph then
       Files.writeString(Path.of(base + ".rtl.gv"), s"digraph rtl { input -> buffer -> ${reduction.toLowerCase} -> output; }\n")
   private def printPlan(config: GeneratorConfig): Unit =
@@ -141,7 +142,7 @@ object Main:
       val metadata = DesignMetadata(Cli.Version, config.domain, architecture, if inverse then "inverse" else "forward", 2, output.toString)
       val base = output.toString.stripSuffix(".sv").stripSuffix(".v")
       Files.writeString(Path.of(base + ".json"), metadata.toJson)
-      if config.graph then Files.writeString(Path.of(base + ".graph.gv"), TransformDot.emit(config.domain, inverse))
+      if config.graph then Files.writeString(Path.of(base + ".graph.gv"), TransformDot.emit(config.domain, inverse, config.radixLog))
       if config.rtlGraph then Files.writeString(Path.of(base + ".rtl.gv"), graph.toDot)
       println(s"Written design in $output.")
       println(s"Written metadata in ${base}.json.")

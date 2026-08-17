@@ -2,6 +2,7 @@ package ngen
 
 import ngen.algebra.{Domains, TransformShape}
 import org.scalatest.funsuite.AnyFunSuite
+import ngen.backend.TransformDot
 
 class DomainSpec extends AnyFunSuite:
   test("all built-in domains validate"):
@@ -16,3 +17,8 @@ class DomainSpec extends AnyFunSuite:
 
   test("Kyber has no primitive 512-th root in its base field"):
     assert((Domains.Kyber256.modulus.q - 1) % 512 != 0)
+
+  test("Kyber transform graph contains exactly seven incomplete layers"):
+    val dot = TransformDot.emit(Domains.Kyber256, inverse = false, radixLog = 1)
+    assert(dot.contains("stage7"))
+    assert(!dot.contains("stage8"))
