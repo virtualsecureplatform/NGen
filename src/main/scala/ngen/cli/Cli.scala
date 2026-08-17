@@ -34,7 +34,7 @@ enum Command:
   case Help
 
 object Cli:
-  val Version = "0.1.0-SNAPSHOT"
+  val Version = "0.1.0"
 
   val usage: String =
     """NGen - A Generator of Streaming NTT Hardware

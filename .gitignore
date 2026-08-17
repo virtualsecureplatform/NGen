@@ -2,6 +2,8 @@
 .idea/
 .metals/
 target/
+build/
+ngen.bat
 project/project/
 project/target/
 *.class
