@@ -61,6 +61,7 @@ object Cli:
       |  ntt             Forward NTT.
       |  intt            Inverse NTT.
       |  raintt          Combined YATA forward/inverse benchmark wrapper.
+      |  kyberpe         Combined Kyber PE1 forward/inverse wrapper.
       |  presets         List built-in field/domain presets.
       |  version         Print the NGen version.
       |
@@ -115,7 +116,7 @@ object Cli:
         case "-check" => check = true
         case "-nologo" => ()
         case "-h" | "--help" | "help" => terminal = Some("help")
-        case value @ ("ntt" | "intt" | "raintt" | "presets" | "version") =>
+        case value @ ("ntt" | "intt" | "raintt" | "kyberpe" | "presets" | "version") =>
           require(terminal.isEmpty, s"multiple transforms specified: ${terminal.get} and $value")
           terminal = Some(value)
         case unknown => throw new IllegalArgumentException(s"unknown argument: $unknown")
@@ -124,7 +125,7 @@ object Cli:
       case Some("help") => Command.Help
       case Some("presets") => Command.Presets
       case Some("version") => Command.Version
-      case Some(transform @ ("ntt" | "intt" | "raintt")) =>
+      case Some(transform @ ("ntt" | "intt" | "raintt" | "kyberpe")) =>
         val selected = preset match
           case Some(name) =>
             require(n.isEmpty && q.isEmpty && root.isEmpty && psi.isEmpty, "a preset cannot be combined with -n, -q, -root, or -psi")

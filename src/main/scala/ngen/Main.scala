@@ -6,6 +6,7 @@ import ngen.transform.ReferenceNtt
 import ngen.backend.YataStreamingSystemVerilog
 import ngen.backend.{DesignMetadata, GraphSystemVerilog, TransformDot}
 import ngen.backend.HogeSystemVerilog
+import ngen.backend.KyberSystemVerilog
 import ngen.rtl.{Architecture, GenericNttGraph, PipelineProfile, Port, PortDirection, ReductionKind, StreamingContract, ValueFormat}
 
 import java.nio.file.{Files, Path}
@@ -32,6 +33,13 @@ object Main:
 
   private def emit(config: GeneratorConfig): Boolean =
     if config.direction == Direction.Both then
+      if config.domain.name == "kyber256" then
+        require(config.streamingLog == 0 && config.radixLog == 1, "kyberpe requires -k 0 -r 1")
+        val output = Path.of(config.output.getOrElse("KyberHPM1PE.v"))
+        Option(output.getParent).foreach(Files.createDirectories(_))
+        Files.writeString(output, KyberSystemVerilog.emit(config.top.getOrElse("KyberHPM1PE")))
+        println(s"Written design in $output.")
+        return true
       require(Set("yata8", "yata64", "yata512")(config.domain.name), "raintt requires a YATA preset")
       require(config.radixLog == 3, "yata8 RAINTT requires -r 3")
       val expectedStreamingLog = if config.domain.name == "yata512" then 6 else 3
