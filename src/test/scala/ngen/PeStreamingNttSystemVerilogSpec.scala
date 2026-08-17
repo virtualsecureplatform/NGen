@@ -31,10 +31,10 @@ class PeStreamingNttSystemVerilogSpec extends AnyFunSuite:
     val radix2 = PeNttSchedule.build(NttPlan.radix2(domain, inverse = false), 1, 2, 4)
     val radix2Metrics = PeStreamingNttSystemVerilog.metrics(radix2, 4, ProfileName.Baseline)
     assert(radix2Metrics.bundleCount == 16)
-    assert(radix2Metrics.executionCycles == 97)
-    assert(radix2Metrics.latency == 103)
+    assert(radix2Metrics.executionCycles == 37)
+    assert(radix2Metrics.latency == 43)
     val radix4 = PeNttSchedule.build(NttPlan.radix2(domain, inverse = false), 2, 1, 4)
-    assert(PeStreamingNttSystemVerilog.metrics(radix4, 4, ProfileName.Baseline).latency == 31)
+    assert(PeStreamingNttSystemVerilog.metrics(radix4, 4, ProfileName.Baseline).latency == 47)
 
   test("backend emits per-chunk ready-valid ports"):
     val schedule = PeNttSchedule.build(NttPlan.radix2(domain, inverse = false), 1, 1, 4)
@@ -44,3 +44,17 @@ class PeStreamingNttSystemVerilogSpec extends AnyFunSuite:
     assert(rtl.contains("output reg out_valid"))
     assert(rtl.contains("input out_ready"))
     assert(!rtl.contains("input next"))
+
+  test("radix-2 backend emits multi-inflight issue and stage drain control"):
+    val schedule = PeNttSchedule.build(NttPlan.radix2(domain, inverse = false), 1, 2, 4)
+    val rtl = PeStreamingNttSystemVerilog.emit(schedule, 4, "MultiIssueNtt", ProfileName.Baseline, ReductionKind.Shoup)
+    assert(rtl.contains("wire issue_fire=exec_active&&!draining"))
+    assert(rtl.contains("integer inflight_count"))
+    assert(rtl.contains("retire_fire&&draining"))
+
+  test("fused backend registers each internal radix layer"):
+    val schedule = PeNttSchedule.build(NttPlan.radix2(domain, inverse = false), 2, 1, 4)
+    val rtl = PeStreamingNttSystemVerilog.emit(schedule, 4, "LayeredRadix4", ProfileName.Baseline, ReductionKind.Shoup)
+    assert(rtl.contains("pe_0_layer_0_0"))
+    assert(rtl.contains("pe_0_layer_1_0"))
+    assert(rtl.contains("pe_0_valid_pipe[1]"))

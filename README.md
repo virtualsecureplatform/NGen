@@ -84,10 +84,11 @@ standalone one-operation-per-cycle component with:
 ./ngen.bat -q 12289 -reduction shoup -o butterfly-pipeline.sv butterflypipeline
 ```
 
-The current transform controller waits for each radix-2 result before issuing
-the next bundle; stage-barrier-aware multi-bundle issue is the remaining step
-needed to realize one transform bundle per cycle. Radix-4/8 networks are still
-registered only at their external PE boundary.
+The radix-2 transform controller issues one independent bundle per cycle,
+tracks multiple tagged results in flight, permits simultaneous bank reads and
+older-result writes, and drains the arithmetic pipeline only at transform-stage
+boundaries. Radix-4/8 PEs register every internal butterfly layer with aligned
+valid, kind, scaling, and twiddle controls.
 
 `-protocol ready-valid` replaces the transaction-start interface with
 per-chunk `in_valid/in_ready` and `out_valid/out_ready` handshakes. Input

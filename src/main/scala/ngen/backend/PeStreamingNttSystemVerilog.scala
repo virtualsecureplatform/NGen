@@ -20,8 +20,10 @@ object PeStreamingNttSystemVerilog:
   def metrics(schedule: PeNttSchedule, streamingWidth: Int, profile: ProfileName): Metrics =
     val streamCycles = schedule.plan.domain.size / streamingWidth
     val gap = if profile == ProfileName.F300 then 1 else 0
-    val cyclesPerBundle = if schedule.radix == 2 then 6 else 3
-    val executionCycles = 1 + cyclesPerBundle * schedule.bundles.size + math.max(0, schedule.bundles.size - 1) * gap
+    val stageCount = schedule.bundles.map(_.stage).distinct.size
+    val executionCycles =
+      if schedule.radix == 2 then 1 + schedule.bundles.size + 5 * stageCount
+      else 1 + (3 + schedule.radixLog) * schedule.bundles.size + math.max(0, schedule.bundles.size - 1) * gap
     val latency = streamCycles + executionCycles + 2
     // Conservative two-buffer bound; capture and output overlap execution whenever a buffer is available.
     val initiationInterval = math.max(streamCycles, executionCycles)
@@ -139,33 +141,33 @@ object PeStreamingNttSystemVerilog:
 
     val maxButterflySteps = radixLog * radix / 2
     val networkTemplate = schedule.bundles.flatMap(_.operations).find(_.kind == PeOperationKind.Dense).map(_.steps).getOrElse(Vector.empty)
+    val bankWidth = math.max(1, Integer.numberOfTrailingZeros(mapping.bankCount))
+    val packedControlWidth = 2 + 2 * width + 2 * radix * (1 + bankWidth + rowWidth) + (if radix == 2 then 0 else 2 * width * maxButterflySteps)
 
     val peDeclarations =
       if radix == 2 then (0 until peCount).map { pe =>
-        s"reg [1:0] pe_kind_$pe;reg [${width - 1}:0] pe_a_$pe,pe_b_$pe,pe_constant_$pe,pe_precon_$pe;wire pe_pipeline_valid_$pe,pe_pipeline_tag_$pe;wire [${width - 1}:0] pe_out_${pe}_0,pe_out_${pe}_1;wire pe_pipeline_launch_$pe=exec_active&&(exec_phase==2)&&(pe_kind_$pe!=0);NGenInternalPipelinedButterfly #(.TAG_WIDTH(1)) pe_pipeline_$pe(clock,reset,pe_pipeline_launch_$pe,pe_kind_$pe,pe_a_$pe,pe_b_$pe,pe_constant_$pe,pe_precon_$pe,1'b0,pe_pipeline_valid_$pe,pe_out_${pe}_0,pe_out_${pe}_1,pe_pipeline_tag_$pe);"
+        s"reg [1:0] pe_kind_$pe;reg [${width - 1}:0] pe_a_$pe,pe_b_$pe,pe_constant_$pe,pe_precon_$pe;reg [${packedControlWidth - 1}:0] issued_control_$pe,launch_control_$pe;wire [${packedControlWidth - 1}:0] retired_control_$pe;wire pe_pipeline_valid_$pe;wire [${width - 1}:0] pe_out_${pe}_0,pe_out_${pe}_1;wire pe_pipeline_launch_$pe=launch_valid&&(pe_kind_$pe!=0);NGenInternalPipelinedButterfly #(.TAG_WIDTH($packedControlWidth)) pe_pipeline_$pe(clock,reset,pe_pipeline_launch_$pe,pe_kind_$pe,pe_a_$pe,pe_b_$pe,pe_constant_$pe,pe_precon_$pe,launch_control_$pe,pe_pipeline_valid_$pe,pe_out_${pe}_0,pe_out_${pe}_1,retired_control_$pe);"
       }.mkString("\n  ")
       else (0 until peCount).map { pe =>
         val inputs = (0 until radix).map(slot => s"reg [${width - 1}:0] pe_${pe}_in_$slot;").mkString
         val constants = s"reg [1:0] pe_kind_$pe;reg [${width - 1}:0] pe_scale_c_$pe,pe_scale_p_$pe;" +
           (0 until maxButterflySteps).map(step => s"reg [${width - 1}:0] pe_${pe}_step_c_$step,pe_${pe}_step_p_$step;").mkString
-        var references = Vector.tabulate(radix)(slot => s"pe_${pe}_in_$slot")
-        val network = networkTemplate.zipWithIndex.flatMap { case (step,index) =>
-          val product = s"pe_${pe}_step_product_$index"
-          val left = s"pe_${pe}_step_left_$index"
-          val right = s"pe_${pe}_step_right_$index"
-          val lines = Vector(
-            s"wire [${width - 1}:0] $product=${mulCall(references(step.rightSlot),s"pe_${pe}_step_c_$index",s"pe_${pe}_step_p_$index")};",
-            s"wire [${width - 1}:0] $left=mod_add(${references(step.leftSlot)},$product);",
-            s"wire [${width - 1}:0] $right=mod_sub(${references(step.leftSlot)},$product);"
-          )
-          references = references.updated(step.leftSlot,left).updated(step.rightSlot,right)
-          lines
+        val layerRegisters = (for layer <- 0 until radixLog; slot <- 0 until radix yield s"reg [${width - 1}:0] pe_${pe}_layer_${layer}_$slot;").mkString +
+          s"reg [${width - 1}:0] pe_${pe}_scale_pipe[0:${radixLog - 1}];reg [1:0] pe_${pe}_kind_pipe[0:${radixLog - 1}];reg [${radixLog - 1}:0] pe_${pe}_valid_pipe;"
+        val layerLogic = (0 until radixLog).map { layer =>
+          val source = if layer == 0 then Vector.tabulate(radix)(slot => s"pe_${pe}_in_$slot") else Vector.tabulate(radix)(slot => s"pe_${pe}_layer_${layer - 1}_$slot")
+          val assignments = networkTemplate.slice(layer * radix / 2,(layer + 1) * radix / 2).zipWithIndex.flatMap { case (step,within) =>
+            val index = layer * radix / 2 + within
+            val product = mulCall(source(step.rightSlot),s"pe_${pe}_step_c_$index",s"pe_${pe}_step_p_$index")
+            Vector(s"pe_${pe}_layer_${layer}_${step.leftSlot}<=mod_add(${source(step.leftSlot)},$product);",s"pe_${pe}_layer_${layer}_${step.rightSlot}<=mod_sub(${source(step.leftSlot)},$product);")
+          }
+          assignments.mkString
         }.mkString
-        val scaleProduct = s"wire [${width - 1}:0] pe_${pe}_scale_product=${mulCall(s"pe_${pe}_in_0",s"pe_scale_c_$pe",s"pe_scale_p_$pe")};"
+        val pipelineLogic = s"always @(posedge clock)begin if(reset)begin pe_${pe}_valid_pipe<=0;end else begin pe_${pe}_valid_pipe[0]<=exec_active&&(exec_phase==2)&&(pe_kind_$pe!=0);pe_${pe}_kind_pipe[0]<=pe_kind_$pe;pe_${pe}_scale_pipe[0]<=${mulCall(s"pe_${pe}_in_0",s"pe_scale_c_$pe",s"pe_scale_p_$pe")};${(1 until radixLog).map(layer => s"pe_${pe}_valid_pipe[$layer]<=pe_${pe}_valid_pipe[${layer - 1}];pe_${pe}_kind_pipe[$layer]<=pe_${pe}_kind_pipe[${layer - 1}];pe_${pe}_scale_pipe[$layer]<=pe_${pe}_scale_pipe[${layer - 1}];").mkString}$layerLogic end end\n"
         val outputs = (0 until radix).map { output =>
-          s"wire [${width - 1}:0] pe_out_${pe}_$output=(pe_kind_$pe==1)?${if output == 0 then s"pe_${pe}_scale_product" else "0"}:${references(output)};"
+          s"wire [${width - 1}:0] pe_out_${pe}_$output=(pe_${pe}_kind_pipe[${radixLog - 1}]==1)?${if output == 0 then s"pe_${pe}_scale_pipe[${radixLog - 1}]" else "0"}:pe_${pe}_layer_${radixLog - 1}_$output;"
         }.mkString
-        inputs + constants + network + scaleProduct + outputs
+        inputs + constants + layerRegisters + pipelineLogic + s"wire pe_fused_valid_$pe=pe_${pe}_valid_pipe[${radixLog - 1}];" + outputs
       }.mkString("\n  ")
 
     def operationConstant(operation: ngen.rtl.PeOperation): BigInt = operation.kind match
@@ -214,7 +216,6 @@ object PeStreamingNttSystemVerilog:
       s"$index:begin ${writes.mkString(" ")} end"
     }.mkString("\n          ")
 
-    val bankWidth = math.max(1, Integer.numberOfTrailingZeros(mapping.bankCount))
     final case class ControlField(name: String, bits: Int)
     val controlFields = Vector(ControlField("kind",2),ControlField("constant",width),ControlField("precon",width)) ++
       (0 until radix).flatMap(slot => Vector(ControlField(s"input_valid_$slot",1),ControlField(s"input_bank_$slot",bankWidth),ControlField(s"input_row_$slot",rowWidth))) ++
@@ -222,6 +223,7 @@ object PeStreamingNttSystemVerilog:
       (if radix == 2 then Vector.empty else (0 until maxButterflySteps).flatMap(step => Vector(ControlField(s"step_constant_$step",width),ControlField(s"step_precon_$step",width))))
     val controlOffsets = controlFields.scanLeft(0)((offset,field) => offset + field.bits).dropRight(1).zip(controlFields).map { case (offset,field) => field.name -> offset }.toMap
     val controlWidth = controlFields.map(_.bits).sum
+    require(controlWidth == packedControlWidth)
     def controlValue(operation: Option[ngen.rtl.PeOperation], fieldName: String): BigInt = fieldName match
       case "kind" => operation.map(_.kind match
         case PeOperationKind.Scale => 1
@@ -257,22 +259,25 @@ object PeStreamingNttSystemVerilog:
     def packedControl(operation: Option[ngen.rtl.PeOperation]): BigInt = controlFields.foldLeft(BigInt(0)) { (record,field) =>
       record | (controlValue(operation,field.name) << controlOffsets(field.name))
     }
-    def alias(pe: Int, field: ControlField): String =
+    def alias(pe: Int, field: ControlField, source: String, prefix: String): String =
       val range = if field.bits == 1 then s"[${controlOffsets(field.name)}]" else s"[${controlOffsets(field.name)} +: ${field.bits}]"
       val declaration = if field.bits == 1 then "wire" else s"wire [${field.bits - 1}:0]"
       val signalName = field.name match
-        case "kind" => s"op_kind_$pe"
-        case "constant" => s"op_constant_$pe"
-        case "precon" => s"op_precon_$pe"
+        case "kind" => s"${prefix}op_kind_$pe"
+        case "constant" => s"${prefix}op_constant_$pe"
+        case "precon" => s"${prefix}op_precon_$pe"
         case name if name.startsWith("input_") =>
-          val parts = name.split("_"); s"input_${parts(1)}_${pe}_${parts(2)}"
+          val parts = name.split("_"); s"${prefix}input_${parts(1)}_${pe}_${parts(2)}"
         case name if name.startsWith("output_") =>
-          val parts = name.split("_"); s"output_${parts(1)}_${pe}_${parts(2)}"
+          val parts = name.split("_"); s"${prefix}output_${parts(1)}_${pe}_${parts(2)}"
         case name if name.startsWith("step_") =>
-          val parts = name.split("_"); s"step_${parts(1)}_${pe}_${parts(2)}"
-      s"$declaration $signalName=control_$pe$range;"
+          val parts = name.split("_"); s"${prefix}step_${parts(1)}_${pe}_${parts(2)}"
+      s"$declaration $signalName=$source$range;"
     val romDeclarations = (0 until peCount).map { pe =>
-      s"(* rom_style = \"distributed\" *) reg [${controlWidth - 1}:0] control_${pe}_rom[0:BUNDLE_COUNT-1];wire [${controlWidth - 1}:0] control_$pe=control_${pe}_rom[bundle_index];${controlFields.map(alias(pe,_)).mkString}"
+      val issueAliases = controlFields.map(field => alias(pe,field,s"control_$pe","")).mkString
+      val loadAliases = if radix == 2 then controlFields.map(field => alias(pe,field,s"issued_control_$pe","load_")).mkString else ""
+      val retireAliases = if radix == 2 then controlFields.map(field => alias(pe,field,s"retired_control_$pe","retire_")).mkString else ""
+      s"(* rom_style = \"distributed\" *) reg [${controlWidth - 1}:0] control_${pe}_rom[0:BUNDLE_COUNT-1];wire [${controlWidth - 1}:0] control_$pe=control_${pe}_rom[bundle_index];$issueAliases$loadAliases$retireAliases"
     }.mkString("\n  ")
     val romInitializers = schedule.bundles.zipWithIndex.flatMap { case (bundle,bundleIndex) =>
       (0 until peCount).map { pe =>
@@ -282,6 +287,8 @@ object PeStreamingNttSystemVerilog:
     }.mkString("\n    ")
     def bankCase(bankSignal: String)(body: Int => String): String =
       (0 until mapping.bankCount).map(bank => s"${bankWidth}'d$bank:begin ${body(bank)} end").mkString(s"case($bankSignal)"," "," default:begin end endcase")
+    val loadPrefix = if radix == 2 then "load_" else ""
+    val retirePrefix = if radix == 2 then "retire_" else ""
     val dynamicReadPorts = (for pe <- 0 until peCount; slot <- 0 until radix yield
       s"if(input_valid_${pe}_${slot})begin ${bankCase(s"input_bank_${pe}_${slot}") { bank =>
         s"if(exec_buffer)begin ${portName(1,bank,"read_enable")}=1;${portName(1,bank,"read_address")}=input_row_${pe}_${slot};end else begin ${portName(0,bank,"read_enable")}=1;${portName(0,bank,"read_address")}=input_row_${pe}_${slot};end"
@@ -289,24 +296,64 @@ object PeStreamingNttSystemVerilog:
     val dynamicLoads = (0 until peCount).flatMap { pe =>
       val inputLoads = (0 until radix).map { slot =>
         val target = if radix == 2 then (if slot == 0 then s"pe_a_$pe" else s"pe_b_$pe") else s"pe_${pe}_in_$slot"
-        s"if(input_valid_${pe}_${slot})begin ${bankCase(s"input_bank_${pe}_${slot}") { bank =>
+        s"if(${loadPrefix}input_valid_${pe}_${slot})begin ${bankCase(s"${loadPrefix}input_bank_${pe}_${slot}") { bank =>
           s"if(exec_buffer)$target<=${portName(1,bank,"read_data")};else $target<=${portName(0,bank,"read_data")};"
         }} end else $target<=0;"
       }
       val controls =
-        if radix == 2 then Vector(s"pe_kind_$pe<=op_kind_$pe;pe_constant_$pe<=op_constant_$pe;pe_precon_$pe<=op_precon_$pe;")
+        if radix == 2 then Vector(s"pe_kind_$pe<=load_op_kind_$pe;pe_constant_$pe<=load_op_constant_$pe;pe_precon_$pe<=load_op_precon_$pe;")
         else Vector(s"pe_kind_$pe<=op_kind_$pe;pe_scale_c_$pe<=op_constant_$pe;pe_scale_p_$pe<=op_precon_$pe;") ++
           (0 until maxButterflySteps).map(step => s"pe_${pe}_step_c_$step<=step_constant_${pe}_$step;pe_${pe}_step_p_$step<=step_precon_${pe}_$step;")
       inputLoads ++ controls
     }.mkString(" ")
     val dynamicWritePorts = (for pe <- 0 until peCount; output <- 0 until radix yield
-      s"if(output_valid_${pe}_${output})begin ${bankCase(s"output_bank_${pe}_${output}") { bank =>
-        s"if(exec_buffer)begin ${portName(1,bank,"write_enable")}=1;${portName(1,bank,"write_address")}=output_row_${pe}_${output};${portName(1,bank,"write_data")}=pe_out_${pe}_$output;end else begin ${portName(0,bank,"write_enable")}=1;${portName(0,bank,"write_address")}=output_row_${pe}_${output};${portName(0,bank,"write_data")}=pe_out_${pe}_$output;end"
+      s"if(${retirePrefix}output_valid_${pe}_${output})begin ${bankCase(s"${retirePrefix}output_bank_${pe}_${output}") { bank =>
+        s"if(exec_buffer)begin ${portName(1,bank,"write_enable")}=1;${portName(1,bank,"write_address")}=${retirePrefix}output_row_${pe}_${output};${portName(1,bank,"write_data")}=pe_out_${pe}_$output;end else begin ${portName(0,bank,"write_enable")}=1;${portName(0,bank,"write_address")}=${retirePrefix}output_row_${pe}_${output};${portName(0,bank,"write_data")}=pe_out_${pe}_$output;end"
       }} end").mkString(" ")
     val pipelineDefinition = if radix == 2 then PipelinedButterflySystemVerilog.emit(field,reduction,"NGenInternalPipelinedButterfly") else ""
-    val pipelineRetire = if radix == 2 then "pe_pipeline_valid_0" else "1'b1"
-    val writePhase = if radix == 2 then 3 else 2
-    val pipelineLaunchTransition = if radix == 2 then "else if(exec_phase==2)exec_phase<=3;" else ""
+    val pipelineRetire = if radix == 2 then "pe_pipeline_valid_0" else "pe_fused_valid_0"
+    val writePhase = 3
+    val pipelineLaunchTransition = "else if(exec_phase==2)exec_phase<=3;"
+    val stageLastIndices = schedule.bundles.indices.filter(index => index == schedule.bundles.size - 1 || schedule.bundles(index + 1).stage != schedule.bundles(index).stage)
+    val issueLastStage = stageLastIndices.map(index => s"(bundle_index==$index)").mkString("(","||",")")
+    val pipelineControllerDeclarations = if radix == 2 then
+      s"reg issued_valid,launch_valid,draining,all_issued;integer inflight_count;wire issue_fire=exec_active&&!draining;wire retire_fire=pe_pipeline_valid_0;wire issue_last_stage=$issueLastStage;"
+    else ""
+    val executionPorts = if radix == 2 then
+      s"if(issue_fire)begin $dynamicReadPorts end if(retire_fire)begin $dynamicWritePorts end"
+    else s"if(exec_active&&gap_count==0)begin if(exec_phase==0)begin $dynamicReadPorts end else if(exec_phase==$writePhase&&$pipelineRetire)begin $dynamicWritePorts end end"
+    val issueControlLoads = (0 until peCount).map(pe => s"issued_control_$pe<=control_$pe;").mkString
+    val launchControlLoads = (0 until peCount).map(pe => s"launch_control_$pe<=issued_control_$pe;").mkString
+    val pipelinedExecution =
+      s"""if(!exec_active)begin
+         |        issued_valid<=0;launch_valid<=0;
+         |        if(buffer_0_state==READY_STATE)begin exec_active<=1;exec_buffer<=0;buffer_0_state<=EXECUTING;bundle_index<=0;draining<=0;all_issued<=0;inflight_count<=0;end
+         |        else if(buffer_1_state==READY_STATE)begin exec_active<=1;exec_buffer<=1;buffer_1_state<=EXECUTING;bundle_index<=0;draining<=0;all_issued<=0;inflight_count<=0;end
+         |      end else begin
+         |        issued_valid<=issue_fire;launch_valid<=issued_valid;
+         |        if(issue_fire)begin $issueControlLoads if(issue_last_stage)draining<=1;if(bundle_index==BUNDLE_COUNT-1)all_issued<=1;else bundle_index<=bundle_index+1;end
+         |        if(issued_valid)begin $dynamicLoads $launchControlLoads end
+         |        if(issue_fire&&!retire_fire)inflight_count<=inflight_count+1;else if(!issue_fire&&retire_fire)inflight_count<=inflight_count-1;
+         |        if(retire_fire&&draining&&(inflight_count==1)&&!issue_fire)begin
+         |          if(all_issued)begin exec_active<=0;draining<=0;all_issued<=0;inflight_count<=0;if(exec_buffer)buffer_1_state<=DONE;else buffer_0_state<=DONE;end
+         |          else draining<=0;
+         |        end
+         |      end""".stripMargin
+    val serialExecution =
+      s"""if(!exec_active)begin
+         |        if(buffer_0_state==READY_STATE)begin exec_active<=1;exec_buffer<=0;buffer_0_state<=EXECUTING;bundle_index<=0;exec_phase<=0;end
+         |        else if(buffer_1_state==READY_STATE)begin exec_active<=1;exec_buffer<=1;buffer_1_state<=EXECUTING;bundle_index<=0;exec_phase<=0;end
+         |      end else if(gap_count!=0)gap_count<=gap_count-1;
+         |      else if(exec_phase==0)exec_phase<=1;
+         |      else if(exec_phase==1)begin $dynamicLoads exec_phase<=2;end
+         |      $pipelineLaunchTransition
+         |      else if($pipelineRetire)begin
+         |        exec_phase<=0;
+         |        if(bundle_index==BUNDLE_COUNT-1)begin exec_active<=0;bundle_index<=0;if(exec_buffer)buffer_1_state<=DONE;else buffer_0_state<=DONE;end
+         |        else begin bundle_index<=bundle_index+1;gap_count<=BUNDLE_GAP;end
+         |      end""".stripMargin
+    val executionSequential = if radix == 2 then pipelinedExecution else serialExecution
+    val pipelineReset = if radix == 2 then "issued_valid<=0;launch_valid<=0;draining<=0;all_issued<=0;inflight_count<=0;" else ""
 
     val resetOutputs = Vector.tabulate(streamingWidth)(lane => s"o$lane<=0;").mkString
     val emptyBufferReady = "(buffer_0_state==EMPTY)||(buffer_1_state==EMPTY)"
@@ -339,7 +386,7 @@ object PeStreamingNttSystemVerilog:
        |  localparam [2:0] EMPTY=0,CAPTURING=1,READY_STATE=2,EXECUTING=3,DONE=4,OUTPUTTING=5;
        |  localparam [${width - 1}:0] MODULUS=${width}'d${field.q};localparam [${width}:0] MODULUS_EXT=${width + 1}'d${field.q};localparam signed [${3 * width}:0] MODULUS_REMAINDER=${3 * width + 1}'sd${field.q};
        |  $reductionParameter
-       |  reg [2:0] buffer_0_state,buffer_1_state;reg capture_active,capture_buffer,exec_active,exec_buffer,output_active,output_buffer,output_prefetched;reg [1:0] exec_phase;integer capture_count,bundle_index,gap_count,output_count;
+       |  reg [2:0] buffer_0_state,buffer_1_state;reg capture_active,capture_buffer,exec_active,exec_buffer,output_active,output_buffer,output_prefetched;reg [1:0] exec_phase;integer capture_count,bundle_index,gap_count,output_count;$pipelineControllerDeclarations
        |  $memories
        |  $romDeclarations
        |  $peDeclarations
@@ -355,10 +402,7 @@ object PeStreamingNttSystemVerilog:
        |    if(!capture_active)begin
        |      if($firstInputAccepted)begin if(buffer_0_state==EMPTY)begin ${captureWrites(0,0)} end else begin ${captureWrites(1,0)} end end
        |    end else if($continuingInputAccepted)begin case(capture_count)$captureCases default:begin end endcase end
-       |    if(exec_active&&gap_count==0)begin
-       |      if(exec_phase==0)begin $dynamicReadPorts end
-       |      else if(exec_phase==$writePhase&&$pipelineRetire)begin $dynamicWritePorts end
-       |    end
+       |    $executionPorts
        |    if(output_active)begin
        |      if(!output_prefetched)begin case(output_count)$outputCurrentReadCases default:begin end endcase end
        |      else if((output_count<STREAM_CYCLES-1)$outputReadGuard)begin case(output_count)$outputNextReadCases default:begin end endcase end
@@ -368,7 +412,7 @@ object PeStreamingNttSystemVerilog:
        |    $memoryPorts
        |  end
        |  always @(posedge clock) begin
-       |    if(reset)begin buffer_0_state<=EMPTY;buffer_1_state<=EMPTY;capture_active<=0;exec_active<=0;output_active<=0;output_prefetched<=0;capture_count<=0;bundle_index<=0;gap_count<=0;output_count<=0;exec_phase<=0;$resetProtocol$resetOutputs end
+       |    if(reset)begin buffer_0_state<=EMPTY;buffer_1_state<=EMPTY;capture_active<=0;exec_active<=0;output_active<=0;output_prefetched<=0;capture_count<=0;bundle_index<=0;gap_count<=0;output_count<=0;exec_phase<=0;$pipelineReset$resetProtocol$resetOutputs end
        |    else begin
        |      $defaultProtocol
        |      if(!capture_active)begin
@@ -379,18 +423,7 @@ object PeStreamingNttSystemVerilog:
        |      end else if($continuingInputAccepted)begin
        |        if(capture_count==STREAM_CYCLES-1)begin capture_active<=0;capture_count<=0;if(capture_buffer)buffer_1_state<=READY_STATE;else buffer_0_state<=READY_STATE;end else capture_count<=capture_count+1;
        |      end
-       |      if(!exec_active)begin
-       |        if(buffer_0_state==READY_STATE)begin exec_active<=1;exec_buffer<=0;buffer_0_state<=EXECUTING;bundle_index<=0;exec_phase<=0;end
-       |        else if(buffer_1_state==READY_STATE)begin exec_active<=1;exec_buffer<=1;buffer_1_state<=EXECUTING;bundle_index<=0;exec_phase<=0;end
-       |      end else if(gap_count!=0)gap_count<=gap_count-1;
-       |      else if(exec_phase==0)exec_phase<=1;
-       |      else if(exec_phase==1)begin $dynamicLoads exec_phase<=2;end
-       |      $pipelineLaunchTransition
-       |      else if($pipelineRetire)begin
-       |        exec_phase<=0;
-       |        if(bundle_index==BUNDLE_COUNT-1)begin exec_active<=0;bundle_index<=0;if(exec_buffer)buffer_1_state<=DONE;else buffer_0_state<=DONE;end
-       |        else begin bundle_index<=bundle_index+1;gap_count<=BUNDLE_GAP;end
-       |      end
+       |      $executionSequential
        |      if(!output_active)begin
        |        if(buffer_0_state==DONE)begin output_active<=1;output_buffer<=0;output_count<=0;output_prefetched<=0;buffer_0_state<=OUTPUTTING;end
        |        else if(buffer_1_state==DONE)begin output_active<=1;output_buffer<=1;output_count<=0;output_prefetched<=0;buffer_1_state<=OUTPUTTING;end

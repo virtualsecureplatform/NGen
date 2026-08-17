@@ -21,6 +21,9 @@
 - Integrated physical switch-transpose boundaries into square custom streams.
 - Added tagged three-stage Barrett, Montgomery, and Shoup radix-2 butterfly
   pipelines and integrated them into the banked radix-2 PE backend.
+- Added one-bundle-per-cycle radix-2 issue with tagged retirement and
+  drain-before-next-stage barriers.
+- Added valid-aligned registers between every fused radix-4/8 butterfly layer.
 
 ## 0.1.0
 
