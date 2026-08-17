@@ -7,7 +7,7 @@
 - Added generic streamed radix-2 RTL for arbitrary power-of-two `N` and `K`.
 - Added natural/bit-reversed stream ordering, baseline/f300 scheduling, and a
   `ready` transaction contract.
-- Added selectable Barrett and Montgomery constant multiplication.
+- Added selectable Barrett, Montgomery, and preconditioned Shoup constant multiplication.
 - Added automatic exact-order root discovery and configurable incomplete base
   cases beyond Kyber's fixed geometry.
 - Added randomized generated-RTL and synthesis regression coverage.

@@ -62,7 +62,7 @@ object Cli:
       |  -data-width <w> Element width for switchtranspose; defaults to 64.
       |  -profile <name> Pipeline profile: baseline (default) or f300.
       |  -architecture <a> RTL architecture: auto (default), fully-parallel, or streamed.
-      |  -reduction <r>  Modular reduction: auto (default), barrett, or montgomery.
+      |  -reduction <r>  Modular reduction: auto (default), barrett, montgomery, or shoup.
       |  -transpose <t>  Streaming transpose: indexed (default) or switch.
       |  -input-order <o> Input stream order: natural (default) or bitreversed.
       |  -output-order <o> Output stream order: natural (default) or bitreversed.

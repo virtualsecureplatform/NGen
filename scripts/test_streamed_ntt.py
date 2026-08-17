@@ -229,6 +229,10 @@ def main() -> None:
         run_case(run_dir, domains[0], 3, False, architecture="streamed")
         run_case(run_dir, domains[0], 1, False, reduction="montgomery")
         run_case(run_dir, domains[1], 1, True, reduction="montgomery")
+        run_case(run_dir, domains[0], 1, False, reduction="shoup")
+        run_case(run_dir, domains[1], 1, True, reduction="shoup")
+        run_case(run_dir, domains[2], 2, False, reduction="shoup")
+        run_case(run_dir, domains[3], 2, True, reduction="shoup")
         domain = domains[0]
         rng = random.Random(20260817)
         first = [rng.randrange(domain.modulus) for _ in range(domain.size)]

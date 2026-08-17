@@ -2,7 +2,7 @@ package ngen
 
 import ngen.algebra.TransformShape
 import ngen.cli.{Cli, Command, Direction}
-import ngen.rtl.{ProfileName, TransposeKind}
+import ngen.rtl.{ProfileName, ReductionChoice, TransposeKind}
 import org.scalatest.funsuite.AnyFunSuite
 
 class CliSpec extends AnyFunSuite:
@@ -75,3 +75,9 @@ class CliSpec extends AnyFunSuite:
       case other => fail(s"expected generation command, got $other")
     assert(negacyclic.shape == TransformShape.Negacyclic)
     assert(negacyclic.modulus.pow(negacyclic.twist.get, 8) == 96)
+
+  test("custom streamed domains accept Shoup reduction"):
+    val command = Cli.parse(Seq("-n", "3", "-k", "1", "-q", "17", "-root", "9", "-reduction", "shoup", "ntt"))
+    command match
+      case Command.Generate(config) => assert(config.reduction == ReductionChoice.Shoup)
+      case other => fail(s"expected generation command, got $other")

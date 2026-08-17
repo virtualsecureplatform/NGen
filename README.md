@@ -61,8 +61,9 @@ For custom domains, `-architecture auto|fully-parallel|streamed` controls the
 lowering. `auto` preserves the fully-parallel v0.1 implementation when `K=N`
 and otherwise selects the streamed state machine. Streamed designs expose
 `ready`, accept `next` with the first input chunk, and can overlap a new first
-chunk with the previous final output chunk. `-reduction barrett|montgomery`
-selects constant modular multiplication. `-root auto` discovers an exact-order
+chunk with the previous final output chunk. `-reduction barrett|montgomery|shoup`
+selects constant modular multiplication. Shoup emits a precomputed reciprocal
+beside each fixed twiddle and performs one final correction. `-root auto` discovers an exact-order
 root; use `-root auto -psi auto` for complete negacyclic transforms.
 
 `-input-order` and `-output-order` accept `natural` or `bitreversed` for
@@ -114,7 +115,7 @@ couple NGen to the LLM candidate-selection runner.
   switch-backed YATA streaming wrapper.
 - `scripts/test_streamed_ntt.py` generates and simulates randomized cyclic,
   negacyclic, and incomplete NTT/INTT designs across multiple `K`, stream
-  orders, pipeline profiles, Barrett/Montgomery reductions, and an overlapped
+  orders, pipeline profiles, Barrett/Montgomery/Shoup reductions, and an overlapped
   back-to-back transaction.
 - `LLM-NTT-Examples` provides TFHEpp/cuHEpp/Kyber vector oracles for every
   characterized preset, including a standalone HOGE forward-NTT oracle.

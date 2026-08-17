@@ -42,3 +42,9 @@ class GenericStreamingNttSystemVerilogSpec extends AnyFunSuite:
     val rtl = GenericStreamingNttSystemVerilog.emit(NttPlan.radix2(domain, inverse = false), 2, reduction = ngen.rtl.ReductionKind.Montgomery)
     assert(rtl.contains("MONTGOMERY_QINV"))
     assert(!rtl.contains("BARRETT_MU"))
+
+  test("backend emits preconditioned Shoup constant multiplication"):
+    val rtl = GenericStreamingNttSystemVerilog.emit(NttPlan.radix2(domain, inverse = false), 2, reduction = ngen.rtl.ReductionKind.Shoup)
+    assert(rtl.contains("input [4:0] b_shoup"))
+    assert(rtl.contains("approximate_product"))
+    assert(!rtl.contains("BARRETT_MU"))

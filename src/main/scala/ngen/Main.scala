@@ -153,10 +153,11 @@ object Main:
       val fullyParallelCompatible = config.streamingLog == config.domain.logSize &&
         config.inputOrder == DataOrder.Natural && config.outputOrder == DataOrder.Natural &&
         !config.domain.shape.isInstanceOf[ngen.algebra.TransformShape.IncompleteNegacyclic] &&
-        config.reduction != ReductionChoice.Montgomery
+        config.reduction != ReductionChoice.Montgomery && config.reduction != ReductionChoice.Shoup
       val reductionKind = config.reduction match
         case ReductionChoice.Auto | ReductionChoice.Barrett => ReductionKind.Barrett
         case ReductionChoice.Montgomery => ReductionKind.Montgomery
+        case ReductionChoice.Shoup => ReductionKind.Shoup
       val useFullyParallel = config.architecture match
         case ArchitectureKind.Auto => fullyParallelCompatible
         case ArchitectureKind.FullyParallel =>

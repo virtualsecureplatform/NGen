@@ -1,6 +1,6 @@
 package ngen.backend
 
-import ngen.arithmetic.BarrettField
+import ngen.arithmetic.{BarrettField, ShoupField}
 import ngen.rtl.{ProfileName, ReductionKind}
 import ngen.transform.{ButterflyKind, PlannedButterfly, StreamingNttPlan}
 
@@ -35,11 +35,12 @@ object GenericStreamingNttSystemVerilog:
       reduction: ReductionKind = ReductionKind.Barrett
   ): String =
     require(top.matches("[A-Za-z_][A-Za-z0-9_$]*"), s"invalid SystemVerilog module name: $top")
-    require(reduction == ReductionKind.Barrett || reduction == ReductionKind.Montgomery,
-      "generic streamed RTL supports Barrett or Montgomery reduction")
+    require(Set(ReductionKind.Barrett, ReductionKind.Montgomery, ReductionKind.Shoup)(reduction),
+      "generic streamed RTL supports Barrett, Montgomery, or Shoup reduction")
     val domain = plan.domain
     val field = domain.modulus
     val barrett = BarrettField(field)
+    val shoup = ShoupField(field)
     val width = field.bitWidth
     val generatedSchedule = schedule(plan, streamingWidth, profile)
     val inputCycles = generatedSchedule.inputCycles
@@ -52,12 +53,16 @@ object GenericStreamingNttSystemVerilog:
       val normalized = field.normalize(value)
       if reduction == ReductionKind.Montgomery then field.multiply(normalized, montgomeryRadix) else normalized
     def literal(value: BigInt): String = s"${width}'d${encoded(value)}"
+    def shoupPrecondition(value: BigInt): BigInt = shoup.prepare(value).precondition
     def multiply(value: String, factor: BigInt): String =
-      if field.normalize(factor) == 1 then value else s"field_mul($value, ${literal(factor)})"
+      if field.normalize(factor) == 1 then value
+      else if reduction == ReductionKind.Shoup then s"field_mul($value, ${literal(factor)}, ${width}'d${shoupPrecondition(factor)})"
+      else s"field_mul($value, ${literal(factor)})"
 
     val reductionParameters = reduction match
       case ReductionKind.Barrett => s"  localparam [${2 * width - 1}:0] BARRETT_MU = ${2 * width}'d${barrett.mu};"
       case ReductionKind.Montgomery => s"  localparam [${width - 1}:0] MONTGOMERY_QINV = ${width}'d$montgomeryQInv;"
+      case ReductionKind.Shoup => "  // Shoup reciprocals are precomputed beside each constant operand."
       case _ => throw new IllegalArgumentException("unsupported generic reduction")
     val multiplyFunction = reduction match
       case ReductionKind.Barrett =>
@@ -96,6 +101,26 @@ object GenericStreamingNttSystemVerilog:
            |      field_mul = reduced[${width - 1}:0];
            |    end
            |  endfunction""".stripMargin
+      case ReductionKind.Shoup =>
+        s"""  function automatic [${width - 1}:0] field_mul(
+           |      input [${width - 1}:0] a,
+           |      input [${width - 1}:0] b,
+           |      input [${width - 1}:0] b_shoup
+           |  );
+           |    reg [${2 * width - 1}:0] product, approximate_product, quotient_product;
+           |    reg [${width - 1}:0] approximate_quotient;
+           |    reg [${2 * width}:0] remainder;
+           |    begin
+           |      product = {{$width{1'b0}}, a} * {{$width{1'b0}}, b};
+           |      approximate_product = {{$width{1'b0}}, a} * {{$width{1'b0}}, b_shoup};
+           |      approximate_quotient = approximate_product[${2 * width - 1}:$width];
+           |      quotient_product = {{$width{1'b0}}, approximate_quotient} * {{$width{1'b0}}, MODULUS};
+           |      remainder = {1'b0, product} - {1'b0, quotient_product};
+           |      if (remainder >= {{${width + 1}{1'b0}}, MODULUS})
+           |        remainder = remainder - {{${width + 1}{1'b0}}, MODULUS};
+           |      field_mul = remainder[${width - 1}:0];
+           |    end
+           |  endfunction""".stripMargin
       case _ => throw new IllegalArgumentException("unsupported generic reduction")
 
     val inputPorts = Vector.tabulate(streamingWidth)(lane => s"input [${width - 1}:0] i$lane")
@@ -116,15 +141,16 @@ object GenericStreamingNttSystemVerilog:
       val operations = bundle.flatMap { operation =>
         operation.kind match
           case ButterflyKind.DecimationInTime =>
-            val product = s"field_mul(work[${operation.right}], ${literal(operation.twiddle)})"
+            val product = multiply(s"work[${operation.right}]", operation.twiddle)
             Vector(
               s"work[${operation.left}] <= mod_add(work[${operation.left}], $product);",
               s"work[${operation.right}] <= mod_sub(work[${operation.left}], $product);"
             )
           case ButterflyKind.GentlemanSande =>
+            val differenceProduct = multiply(s"mod_sub(work[${operation.right}], work[${operation.left}])", operation.twiddle)
             Vector(
               s"work[${operation.left}] <= mod_add(work[${operation.left}], work[${operation.right}]);",
-              s"work[${operation.right}] <= field_mul(mod_sub(work[${operation.right}], work[${operation.left}]), ${literal(operation.twiddle)});"
+              s"work[${operation.right}] <= $differenceProduct;"
             )
       }
       s"$index: begin ${operations.mkString(" ")} end"
