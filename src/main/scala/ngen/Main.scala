@@ -8,9 +8,9 @@ import ngen.backend.{DesignMetadata, GraphSystemVerilog, TransformDot}
 import ngen.backend.HogeSystemVerilog
 import ngen.backend.KyberSystemVerilog
 import ngen.backend.SwitchTransposeSystemVerilog
-import ngen.backend.GenericStreamingNttSystemVerilog
+import ngen.backend.PeStreamingNttSystemVerilog
 import ngen.rtl.SwitchTransposeSpec
-import ngen.rtl.{Architecture, ArchitectureKind, GenericNttGraph, PipelineProfile, Port, PortDirection, ReductionChoice, ReductionKind, StreamingContract, ValueFormat}
+import ngen.rtl.{Architecture, ArchitectureKind, GenericNttGraph, PeNttSchedule, PipelineProfile, Port, PortDirection, ReductionChoice, ReductionKind, StreamingContract, ValueFormat}
 import ngen.transform.{DataOrder, IncompleteNttPlan, NttPlan, StreamingNttPlan}
 
 import java.nio.file.{Files, Path}
@@ -143,8 +143,7 @@ object Main:
       println(s"Written design in $output.")
       true
     else if config.domain.name == "custom" then
-      require(config.transpose == ngen.rtl.TransposeKind.Indexed, "custom-prime v0.1 RTL supports indexed transpose only")
-      require(config.radixLog == 1, "custom-prime RTL in v0.1 requires -r 1")
+      require(config.transpose == ngen.rtl.TransposeKind.Indexed, "banked custom RTL currently supports indexed transpose only")
       val profile = PipelineProfile.named(config.profile)
       val inverse = config.direction == Direction.Inverse
       val output = Path.of(config.output.getOrElse("design.sv"))
@@ -153,7 +152,7 @@ object Main:
       val fullyParallelCompatible = config.streamingLog == config.domain.logSize &&
         config.inputOrder == DataOrder.Natural && config.outputOrder == DataOrder.Natural &&
         !config.domain.shape.isInstanceOf[ngen.algebra.TransformShape.IncompleteNegacyclic] &&
-        config.reduction != ReductionChoice.Montgomery && config.reduction != ReductionChoice.Shoup
+        config.reduction != ReductionChoice.Montgomery && config.reduction != ReductionChoice.Shoup && config.radixLog == 1 && config.peCount.isEmpty
       val reductionKind = config.reduction match
         case ReductionChoice.Auto | ReductionChoice.Barrett => ReductionKind.Barrett
         case ReductionChoice.Montgomery => ReductionKind.Montgomery
@@ -161,9 +160,10 @@ object Main:
       val useFullyParallel = config.architecture match
         case ArchitectureKind.Auto => fullyParallelCompatible
         case ArchitectureKind.FullyParallel =>
-          require(fullyParallelCompatible, "fully-parallel custom RTL requires K=N, natural stream order, and a complete transform")
+          require(fullyParallelCompatible, "fully-parallel custom RTL requires K=N, radix 2, natural stream order, a complete transform, and no -pe override")
           true
         case ArchitectureKind.Streamed => false
+      var architectureParameters = Map.empty[String, Int]
       val architecture =
         if useFullyParallel then
           val graph = GenericNttGraph.build(config.domain, inverse, profile)
@@ -182,19 +182,29 @@ object Main:
                 "incomplete transforms currently expose natural-order streams only")
               IncompleteNttPlan(config.domain, inverse)
             case _ => NttPlan.radix2(config.domain, inverse, config.inputOrder, config.outputOrder)
-          val schedule = GenericStreamingNttSystemVerilog.schedule(plan, config.streamingWidth, config.profile)
-          Files.writeString(output, GenericStreamingNttSystemVerilog.emit(plan, config.streamingWidth, top, config.profile, reductionKind))
+          val requestedPeCount = config.peCount.getOrElse(math.max(1, config.streamingWidth / 2))
+          val schedule = PeNttSchedule.build(plan, config.radixLog, requestedPeCount, config.streamingWidth)
+          val metrics = PeStreamingNttSystemVerilog.metrics(schedule, config.streamingWidth, config.profile)
+          architectureParameters = Map(
+            "pe_count" -> metrics.peCount,
+            "radix" -> metrics.radix,
+            "bank_count_per_buffer" -> metrics.bankCount,
+            "bank_depth" -> metrics.bankDepth,
+            "coefficient_buffers" -> 2,
+            "operation_bundles" -> metrics.bundleCount
+          )
+          Files.writeString(output, PeStreamingNttSystemVerilog.emit(schedule, config.streamingWidth, top, config.profile, reductionKind))
           Architecture(
-            s"custom-${if inverse then "intt" else "ntt"}-streamed-radix2",
+            s"custom-${if inverse then "intt" else "ntt"}-banked-pe-radix${config.radix}",
             Vector(Port("clock", PortDirection.Input, ValueFormat.Valid), Port("reset", PortDirection.Input, ValueFormat.Valid), Port("next", PortDirection.Input, ValueFormat.Valid), Port("ready", PortDirection.Output, ValueFormat.Valid)),
             Vector.empty,
-            Vector(ngen.rtl.MemorySpec("work", config.domain.size, ValueFormat.unsigned(config.domain.modulus.bitWidth), readLatency = 0)),
-            Vector(ngen.rtl.CounterSpec("capture", schedule.inputCycles), ngen.rtl.CounterSpec("bundle", math.max(1, schedule.bundles.size)), ngen.rtl.CounterSpec("output", schedule.outputCycles)),
-            StreamingContract(config.domain.size, config.streamingWidth, schedule.inputCycles, schedule.outputCycles, schedule.latency, schedule.initiationInterval),
+            Vector(ngen.rtl.MemorySpec("coefficient_buffers", metrics.bankDepth, ValueFormat.unsigned(config.domain.modulus.bitWidth), banks = 2 * metrics.bankCount, readLatency = 1)),
+            Vector(ngen.rtl.CounterSpec("capture", metrics.inputCycles), ngen.rtl.CounterSpec("bundle", math.max(1, metrics.bundleCount)), ngen.rtl.CounterSpec("output", metrics.outputCycles)),
+            StreamingContract(config.domain.size, config.streamingWidth, metrics.inputCycles, metrics.outputCycles, metrics.latency, metrics.initiationInterval),
             reductionKind, profile
           )
-      val metadata = DesignMetadata(Cli.Version, config.domain, architecture, if inverse then "inverse" else "forward", 2, output.toString,
-        config.inputOrder.toString.toLowerCase, config.outputOrder.toString.toLowerCase)
+      val metadata = DesignMetadata(Cli.Version, config.domain, architecture, if inverse then "inverse" else "forward", config.radix, output.toString,
+        config.inputOrder.toString.toLowerCase, config.outputOrder.toString.toLowerCase, architectureParameters)
       val base = output.toString.stripSuffix(".sv").stripSuffix(".v")
       Files.writeString(Path.of(base + ".json"), metadata.toJson)
       if config.graph then Files.writeString(Path.of(base + ".graph.gv"), TransformDot.emit(config.domain, inverse, config.radixLog))

@@ -11,6 +11,9 @@
 - Added automatic exact-order root discovery and configurable incomplete base
   cases beyond Kyber's fixed geometry.
 - Added randomized generated-RTL and synthesis regression coverage.
+- Added reusable PE counts, synchronous conflict-free memory banks, indexed
+  address/twiddle control ROMs, and two-buffer overlap.
+- Added generated fused radix-4 and radix-8 PEs for complete transforms.
 
 ## 0.1.0
 

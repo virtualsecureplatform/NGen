@@ -20,10 +20,10 @@ operations into the configured hardware width.
 | `hoge1024` | N=1024, K=32, radix 32 | packed `NTTWrap`/`INTTWrap` |
 | `kyber256` | N=256, one PE | Kyber PE1 load/start/read protocol |
 
-Custom NTT-friendly primes support fully-parallel or streamed radix-2
+Custom NTT-friendly primes support fully-parallel or banked streaming
 generation at any power-of-two streaming width. Complete cyclic and
-negacyclic transforms, plus parameterized incomplete negacyclic transforms,
-share the canonical plan and streamed backend.
+negacyclic transforms support fused radix 2, 4, or 8; parameterized incomplete
+negacyclic transforms currently use radix 2.
 
 ## Build and use
 
@@ -50,6 +50,9 @@ sbt test assembly
 
 ./ngen.bat -n 4 -k 2 -r 1 -q 12289 -root auto \
   -input-order natural -output-order bitreversed -o streamed.sv intt
+
+./ngen.bat -n 8 -k 3 -r 2 -pe 2 -q 12289 -root auto \
+  -architecture streamed -reduction shoup -o radix4.sv ntt
 ```
 
 Options precede the terminal transform. `-n`, `-k`, and `-r` are base-2
@@ -66,11 +69,20 @@ selects constant modular multiplication. Shoup emits a precomputed reciprocal
 beside each fixed twiddle and performs one final correction. `-root auto` discovers an exact-order
 root; use `-root auto -psi auto` for complete negacyclic transforms.
 
+The streamed backend uses `-pe <count>` reusable PEs, synchronous
+conflict-free banks, indexed address/twiddle control ROMs, and two coefficient
+buffers. One buffer can capture while the other executes, and output can drain
+one buffer while the next transform executes. The default PE count is
+`max(1, K/2)`. Multipliers therefore scale with PE count rather than with the
+number of scheduled butterflies.
+
 `-input-order` and `-output-order` accept `natural` or `bitreversed` for
 complete transforms. `-base-case <size>` selects an incomplete negacyclic
-transform that stops at polynomial blocks of that size. Higher-radix algebraic
-fusion is represented and reference-checked in the planner; generic fused RTL
-emission remains future work, so custom RTL currently requires `-r 1`.
+transform that stops at polynomial blocks of that size. `-r 1`, `-r 2`, and
+`-r 3` lower verified fused plans to reusable radix-2/4/8 PEs when the radix
+logarithm divides `n`. Fused radix-4/8 PEs use constant-twiddle butterfly
+networks with shared intermediate results, trading more multipliers
+for fewer memory passes.
 
 `-transpose indexed` preserves the v0.1 compiled-address implementation.
 `-transpose switch` uses recursive HOGE `SwitchTransposeUnit` networks for

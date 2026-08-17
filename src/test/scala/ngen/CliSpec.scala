@@ -81,3 +81,11 @@ class CliSpec extends AnyFunSuite:
     command match
       case Command.Generate(config) => assert(config.reduction == ReductionChoice.Shoup)
       case other => fail(s"expected generation command, got $other")
+
+  test("custom streamed domains expose PE count and fused radix"):
+    val command = Cli.parse(Seq("-n", "4", "-k", "2", "-r", "2", "-pe", "1", "-q", "97", "-root", "8", "ntt"))
+    command match
+      case Command.Generate(config) =>
+        assert(config.radix == 4)
+        assert(config.peCount.contains(1))
+      case other => fail(s"expected generation command, got $other")

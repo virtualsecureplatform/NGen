@@ -102,7 +102,7 @@ def testbench(width: int, lanes: int, inputs: list[int], outputs: list[int]) -> 
             checks.append("    @(posedge clock); #1;")
         for lane in range(lanes):
             expected = outputs[cycle * lanes + lane]
-            checks.append(f"    if (o{lane} !== {width}'d{expected}) $fatal(1, \"cycle {cycle} lane {lane}: got %0d expected {expected} output_count=%0d work=%0d\", o{lane}, dut.output_count, dut.work[{cycle * lanes + lane}]);")
+            checks.append(f"    if (o{lane} !== {width}'d{expected}) $fatal(1, \"cycle {cycle} lane {lane}: got %0d expected {expected} output_count=%0d\", o{lane}, dut.output_count);")
     return f"""module test;
   reg clock = 0, reset = 1, next = 0;
   wire ready, next_out;
@@ -136,14 +136,12 @@ def back_to_back_testbench(width: int, lanes: int, first_inputs: list[int], firs
     def checks(values: list[int], cycle: int) -> str:
         return " ".join(f"if(o{lane}!=={width}'d{values[cycle * lanes + lane]}) $fatal(1,\"back-to-back dataset output mismatch\");" for lane in range(lanes))
     first_drive = "\n".join(f"    @(negedge clock); {drive(first_inputs, cycle, cycle == 0)} @(posedge clock); #1;" for cycle in range(cycles))
+    second_drive = "\n".join(f"    @(negedge clock); {drive(second_inputs, cycle, cycle == 0)} @(posedge clock); #1;" for cycle in range(cycles))
     first_check = []
     for cycle in range(cycles):
-        first_check.append(f"    {checks(first_outputs, cycle)}")
-        if cycle == cycles - 2:
-            first_check.append(f"    @(negedge clock); if(!ready) $fatal(1,\"ready not asserted for overlap\"); {drive(second_inputs, 0, True)} @(posedge clock); #1;")
-        elif cycle < cycles - 1:
+        if cycle > 0:
             first_check.append("    @(posedge clock); #1;")
-    remaining_drive = "\n".join(f"    @(negedge clock); {drive(second_inputs, cycle, False)} @(posedge clock); #1;" for cycle in range(1, cycles))
+        first_check.append(f"    {checks(first_outputs, cycle)}")
     second_check = []
     for cycle in range(cycles):
         if cycle > 0:
@@ -158,10 +156,11 @@ def back_to_back_testbench(width: int, lanes: int, first_inputs: list[int], firs
   initial begin
     repeat(2) @(posedge clock); @(negedge clock); reset=0;
 {first_drive}
+    if(!ready) $fatal(1,"second ping-pong buffer was not ready during execution");
+{second_drive}
     next=0; while(!next_out) begin @(posedge clock); #1; end
 {chr(10).join(first_check)}
-{remaining_drive}
-    next=0; while(!next_out) begin @(posedge clock); #1; end
+    while(!next_out) begin @(posedge clock); #1; end
 {chr(10).join(second_check)}
     $display("PASS streamed NTT back-to-back"); $finish;
   end
@@ -171,7 +170,8 @@ endmodule
 
 def run_case(run_dir: Path, domain: Domain, streaming_log: int, inverse: bool,
              input_order: str = "natural", output_order: str = "natural",
-             profile: str = "baseline", architecture: str = "auto", reduction: str = "auto") -> None:
+             profile: str = "baseline", architecture: str = "auto", reduction: str = "auto",
+             radix_log: int = 1, pe_count: int | None = None) -> None:
     log_size = domain.size.bit_length() - 1
     lanes = 1 << streaming_log
     rng = random.Random((domain.modulus << 8) ^ (streaming_log << 2) ^ int(inverse))
@@ -180,12 +180,14 @@ def run_case(run_dir: Path, domain: Domain, streaming_log: int, inverse: bool,
     rtl_inputs = natural_inputs if input_order == "natural" else [natural_inputs[bit_reverse(i, log_size)] for i in range(domain.size)]
     rtl_outputs = natural_outputs if output_order == "natural" else [natural_outputs[bit_reverse(i, log_size)] for i in range(domain.size)]
 
-    stem = f"{domain.name}_{'intt' if inverse else 'ntt'}_k{streaming_log}_{input_order}_{output_order}_{profile}_{architecture}_{reduction}"
+    stem = f"{domain.name}_{'intt' if inverse else 'ntt'}_k{streaming_log}_r{radix_log}_pe{pe_count}_{input_order}_{output_order}_{profile}_{architecture}_{reduction}"
     rtl = run_dir / f"{stem}.sv"
-    args = ["bash", str(ROOT / "ngen.bat"), "-n", str(log_size), "-k", str(streaming_log), "-r", "1",
+    args = ["bash", str(ROOT / "ngen.bat"), "-n", str(log_size), "-k", str(streaming_log), "-r", str(radix_log),
             "-q", str(domain.modulus), "-root", str(domain.root), "-input-order", input_order,
             "-output-order", output_order, "-profile", profile, "-architecture", architecture,
             "-reduction", reduction, "-o", str(rtl)]
+    if pe_count is not None:
+        args.extend(["-pe", str(pe_count)])
     if domain.twist is not None:
         args.extend(["-psi", str(domain.twist)])
     if domain.base_case is not None:
@@ -199,6 +201,12 @@ def run_case(run_dir: Path, domain: Domain, streaming_log: int, inverse: bool,
     assert metadata["input_order"] == input_order
     assert metadata["output_order"] == output_order
     assert metadata["profile"] == profile
+    parameters = metadata.get("architecture_parameters", {})
+    if parameters:
+        expected_pe = min(pe_count if pe_count is not None else max(1, lanes // 2), max(1, domain.size // (1 << radix_log)))
+        assert parameters["pe_count"] == expected_pe
+        assert parameters["radix"] == 1 << radix_log
+        assert parameters["coefficient_buffers"] == 2
 
     tb = run_dir / f"{stem}_tb.sv"
     tb.write_text(testbench(domain.modulus.bit_length(), lanes, rtl_inputs, rtl_outputs))
@@ -233,6 +241,11 @@ def main() -> None:
         run_case(run_dir, domains[1], 1, True, reduction="shoup")
         run_case(run_dir, domains[2], 2, False, reduction="shoup")
         run_case(run_dir, domains[3], 2, True, reduction="shoup")
+        run_case(run_dir, domains[0], 2, False, reduction="shoup", radix_log=3, pe_count=1)
+        run_case(run_dir, domains[0], 2, True, reduction="montgomery", radix_log=3, pe_count=1)
+        run_case(run_dir, domains[1], 2, False, reduction="barrett", radix_log=3, pe_count=1)
+        run_case(run_dir, domains[3], 2, False, reduction="shoup", radix_log=2, pe_count=1)
+        run_case(run_dir, domains[3], 2, True, reduction="montgomery", radix_log=2, pe_count=2)
         domain = domains[0]
         rng = random.Random(20260817)
         first = [rng.randrange(domain.modulus) for _ in range(domain.size)]

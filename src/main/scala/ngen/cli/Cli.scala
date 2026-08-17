@@ -13,6 +13,7 @@ final case class GeneratorConfig(
     domain: NttDomain,
     streamingLog: Int,
     radixLog: Int,
+    peCount: Option[Int],
     direction: Direction,
     check: Boolean,
     output: Option[String],
@@ -32,6 +33,7 @@ final case class GeneratorConfig(
   require(streamingLog >= 0 && streamingLog <= domain.logSize)
   require(radixLog > 0 && radixLog <= domain.logSize)
   require(domain.logSize % radixLog == 0, s"radix log $radixLog must divide transform log ${domain.logSize}")
+  require(peCount.forall(_ > 0), "PE count must be positive")
 
 enum Command:
   case Generate(config: GeneratorConfig)
@@ -52,7 +54,8 @@ object Cli:
       |  -preset <name>  Use yata8, yata512, hoge1024, or kyber256 conventions.
       |  -n <n>          log2 of the transform size (required without a preset).
       |  -k <k>          log2 of the streaming width; defaults to n.
-      |  -r <r>          log2 of the radix; defaults to the largest divisor of n <= k.
+      |  -r <r>          log2 of the radix; custom domains default to radix 2.
+      |  -pe <count>     Reusable butterfly PE count; defaults to max(1, K/2).
       |  -q <prime>      Field modulus for a custom domain (decimal or 0x hexadecimal).
       |  -root <value>   Primitive N-th root for a custom domain; value may be auto.
       |  -psi <value>    Optional primitive 2N-th root; use -root auto -psi auto for automatic negacyclic roots.
@@ -103,6 +106,7 @@ object Cli:
     var n: Option[Int] = None
     var k: Option[Int] = None
     var r: Option[Int] = None
+    var peCount: Option[Int] = None
     var q: Option[BigInt] = None
     var root: Option[String] = None
     var psi: Option[String] = None
@@ -127,6 +131,7 @@ object Cli:
         case "-n" => n = Some(requiredValue(args, "-n").toInt)
         case "-k" => k = Some(requiredValue(args, "-k").toInt)
         case "-r" => r = Some(requiredValue(args, "-r").toInt)
+        case "-pe" => peCount = Some(requiredValue(args, "-pe").toInt)
         case "-q" => q = Some(integer(requiredValue(args, "-q")))
         case "-root" => root = Some(requiredValue(args, "-root"))
         case "-psi" => psi = Some(requiredValue(args, "-psi"))
@@ -155,7 +160,7 @@ object Cli:
       case Some("presets") => Command.Presets
       case Some("version") => Command.Version
       case Some("switchtranspose") =>
-        require(preset.isEmpty && q.isEmpty && root.isEmpty && psi.isEmpty && baseCase.isEmpty, "switchtranspose uses -n and -data-width, not a transform domain")
+        require(preset.isEmpty && q.isEmpty && root.isEmpty && psi.isEmpty && baseCase.isEmpty && peCount.isEmpty, "switchtranspose uses -n and -data-width, not transform architecture options")
         val logSize = n.getOrElse(throw new IllegalArgumentException("switchtranspose requires -n"))
         require(logSize > 0 && logSize < 16)
         require(dataWidth > 0)
@@ -163,7 +168,7 @@ object Cli:
       case Some(transform @ ("ntt" | "intt" | "raintt" | "kyberpe")) =>
         val selected = preset match
           case Some(name) =>
-            require(n.isEmpty && q.isEmpty && root.isEmpty && psi.isEmpty && baseCase.isEmpty, "a preset cannot be combined with custom-domain options")
+            require(n.isEmpty && q.isEmpty && root.isEmpty && psi.isEmpty && baseCase.isEmpty && peCount.isEmpty, "a preset cannot be combined with custom-domain options")
             Domains.named(name).getOrElse(
               throw new IllegalArgumentException(s"unknown preset '$name'; expected ${Domains.all.map(_.name).mkString(", ")}")
             )
@@ -195,12 +200,16 @@ object Cli:
 
         selected.validate()
         val streamingLog = k.getOrElse(selected.logSize)
-        val radixLog = r.getOrElse((1 to streamingLog).reverse.find(selected.logSize % _ == 0).getOrElse(1))
+        val radixLog = r.getOrElse(
+          if selected.name == "custom" then 1
+          else (1 to streamingLog).reverse.find(selected.logSize % _ == 0).getOrElse(1)
+        )
         Command.Generate(
           GeneratorConfig(
             selected,
             streamingLog,
             radixLog,
+            peCount,
             if transform == "ntt" then Direction.Forward
             else if transform == "intt" then Direction.Inverse
             else Direction.Both,
