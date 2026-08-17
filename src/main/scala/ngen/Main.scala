@@ -3,7 +3,7 @@ package ngen
 import ngen.algebra.Domains
 import ngen.cli.{Cli, Command, Direction, GeneratorConfig}
 import ngen.transform.ReferenceNtt
-import ngen.backend.YataSystemVerilog
+import ngen.backend.YataStreamingSystemVerilog
 import ngen.backend.{DesignMetadata, GraphSystemVerilog, TransformDot}
 import ngen.rtl.{Architecture, GenericNttGraph, PipelineProfile, Port, PortDirection, ReductionKind, StreamingContract, ValueFormat}
 
@@ -31,13 +31,18 @@ object Main:
 
   private def emit(config: GeneratorConfig): Boolean =
     if config.direction == Direction.Both then
-      require(config.domain.name == "yata8", "raintt RTL emission currently supports -preset yata8")
-      require(config.streamingLog == 3, "yata8 RAINTT requires -k 3")
+      require(Set("yata8", "yata64", "yata512")(config.domain.name), "raintt requires a YATA preset")
       require(config.radixLog == 3, "yata8 RAINTT requires -r 3")
+      val expectedStreamingLog = if config.domain.name == "yata512" then 6 else 3
+      require(config.streamingLog == expectedStreamingLog, s"${config.domain.name} requires -k $expectedStreamingLog")
       val output = Path.of(config.output.getOrElse("design.sv"))
       Option(output.getParent).foreach(Files.createDirectories(_))
-      val top = config.top.getOrElse("SmallYata8RainttP27Rtl")
-      Files.writeString(output, YataSystemVerilog.emitRadix8(top))
+      val defaultTop = config.domain.name match
+        case "yata8" => "SmallYata8RainttP27Rtl"
+        case "yata64" => "SmallYata8x8RainttP27Rtl"
+        case _ => "YataRainttTop"
+      val top = config.top.getOrElse(defaultTop)
+      Files.writeString(output, YataStreamingSystemVerilog.emit(config.domain.logSize, config.streamingLog, top))
       println(s"Written design in $output.")
       true
     else if config.domain.name == "custom" then
