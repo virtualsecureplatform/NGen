@@ -3,6 +3,13 @@ package ngen.backend
 import ngen.arithmetic.HogeField
 
 object HogeSystemVerilog:
+  private sealed trait MicroOp:
+    def indices: Set[Int]
+  private final case class Butterfly(left: Int, right: Int) extends MicroOp:
+    override val indices = Set(left, right)
+  private final case class Multiply(index: Int, constant: BigInt) extends MicroOp:
+    override val indices = Set(index)
+
   private def hex(value: BigInt): String = f"64'h${HogeField.normalize(value)}%016x"
   private def lines(values: Seq[String], indent: Int): String = values.map(" " * indent + _).mkString("\n")
 
@@ -12,6 +19,88 @@ object HogeSystemVerilog:
       val right = left + size / 2
       Vector(s"temp = work[$left];", s"work[$left] = hoge_add(work[$left], work[$right]);", s"work[$right] = hoge_sub(temp, work[$right]);")
     }.flatten
+
+  private def butterflyOps(offset: Int, size: Int): Vector[MicroOp] =
+    Vector.tabulate(size / 2)(index => Butterfly(offset + index, offset + index + size / 2))
+
+  private def inverseButterflyOps(offset: Int, size: Int, radixLog: Int): Vector[MicroOp] =
+    if radixLog == 0 then Vector.empty
+    else
+      val block = size >> radixLog
+      val shifts = (for
+        lane <- 1 until 1 << (radixLog - 1)
+        index <- 0 until block
+      yield Multiply(offset + size / 2 + lane * block + index, BigInt(2).modPow(3 * (lane << (6 - radixLog)), HogeField.Modulus))).toVector
+      butterflyOps(offset, size) ++ shifts ++ inverseButterflyOps(offset, size / 2, radixLog - 1) ++ inverseButterflyOps(offset + size / 2, size / 2, radixLog - 1)
+
+  private def forwardButterflyOps(offset: Int, size: Int, radixLog: Int): Vector[MicroOp] =
+    if radixLog == 0 then Vector.empty
+    else
+      val block = size >> radixLog
+      val shifts =
+        if radixLog == 1 then Vector.empty
+        else (for
+          lane <- 1 until 1 << (radixLog - 1)
+          index <- 0 until block
+        yield Multiply(offset + size / 2 + lane * block + index, BigInt(2).modPow(3 * (64 - (lane << (6 - radixLog))), HogeField.Modulus))).toVector
+      forwardButterflyOps(offset + size / 2, size / 2, radixLog - 1) ++ forwardButterflyOps(offset, size / 2, radixLog - 1) ++ shifts ++ butterflyOps(offset, size)
+
+  private def inverseProgram(logSize: Int, radixLog: Int): Vector[MicroOp] =
+    val size = 1 << logSize
+    val tables = HogeField.tables(logSize)
+    var result = Vector.tabulate(size)(i => Multiply(i, tables.inverseTwist(i)): MicroOp)
+    var sizeLog = logSize
+    while sizeLog > radixLog do
+      val blockSize = 1 << sizeLog
+      val blockCount = 1 << (logSize - sizeLog)
+      for block <- 0 until blockCount do
+        val offset = block * blockSize
+        result ++= inverseButterflyOps(offset, blockSize, radixLog)
+        val subblock = blockSize >> radixLog
+        for lane <- 1 until 1 << radixLog; index <- 1 until subblock do
+          val position = offset + lane * subblock + index
+          result :+= Multiply(position, tables.inverse(HogeField.reverse(lane, radixLog) * blockCount * index))
+      sizeLog -= radixLog
+    for block <- 0 until 1 << (logSize - radixLog) do result ++= inverseButterflyOps(block << radixLog, 1 << radixLog, radixLog)
+    result
+
+  private def forwardProgram(logSize: Int, radixLog: Int): Vector[MicroOp] =
+    val size = 1 << logSize
+    val tables = HogeField.tables(logSize)
+    var result = Vector.empty[MicroOp]
+    for block <- 0 until 1 << (logSize - radixLog) do result ++= forwardButterflyOps(block << radixLog, 1 << radixLog, radixLog)
+    var sizeLog = 2 * radixLog
+    while sizeLog <= logSize do
+      val blockSize = 1 << sizeLog
+      val blockCount = 1 << (logSize - sizeLog)
+      val subblock = blockSize >> radixLog
+      for block <- 0 until blockCount do
+        val offset = block * blockSize
+        for lane <- 1 until 1 << radixLog; index <- 1 until subblock do
+          val position = offset + lane * subblock + index
+          result :+= Multiply(position, tables.forward(HogeField.reverse(lane, radixLog) * blockCount * index))
+        result ++= forwardButterflyOps(offset, blockSize, radixLog)
+      sizeLog += radixLog
+    val inverseSize = HogeField.inversePowerOfTwo(logSize)
+    for index <- 0 until size do
+      result :+= Multiply(index, tables.forwardTwist(index))
+      result :+= Multiply(index, inverseSize)
+    result
+
+  private def bundle(program: Vector[MicroOp], width: Int = 32): Vector[Vector[MicroOp]] =
+    val groups = scala.collection.mutable.ArrayBuffer.empty[Vector[MicroOp]]
+    var current = Vector.empty[MicroOp]
+    var used = Set.empty[Int]
+    program.foreach { operation =>
+      if current.size == width || operation.indices.exists(used) then
+        groups += current
+        current = Vector.empty
+        used = Set.empty
+      current :+= operation
+      used ++= operation.indices
+    }
+    if current.nonEmpty then groups += current
+    groups.toVector
 
   private def inverseButterfly(offset: Int, size: Int, radixLog: Int): Vector[String] =
     if radixLog == 0 then Vector.empty
@@ -126,19 +215,28 @@ object HogeSystemVerilog:
     val size = 1024
     val lanes = 32
     val cycles = 32
-    val body = if inverse then inverseTransform(10,5) else forwardTransform(10,5)
+    val groups = bundle(if inverse then inverseProgram(10,5) else forwardProgram(10,5))
+    require(groups.size < 3990, s"HOGE program exceeds watchdog: ${groups.size} bundles")
+    val slots = groups.size * lanes
     val inputWidth = if inverse then 32 else 64
     val outputWidth = 64
     val inputBuffer = if inverse then "intt_in_buf" else "ntt_in_buf"
-    val outputBuffer = if inverse then "intt_out_buf" else "ntt_out_buf"
     val capture = Vector.tabulate(lanes) { lane =>
       val index = if inverse then s"$lane * $cycles + input_count" else s"input_count * $lanes + $lane"
       s"$inputBuffer[$index] = io_in[$lane * $inputWidth +: $inputWidth];"
     }
-    val output = Vector.tabulate(lanes)(lane => s"io_out[$lane * $outputWidth +: $outputWidth] <= $outputBuffer[output_count * $lanes + $lane];")
-    val stores = Vector.tabulate(size)(i => s"$outputBuffer[$i] <= work[$i];")
+    val output = Vector.tabulate(lanes)(lane => s"io_out[$lane * $outputWidth +: $outputWidth] <= work[output_count * $lanes + $lane];")
+    val initializeWork = Vector.tabulate(size)(i => if inverse then s"work[$i] = {32'd0, intt_in_buf[$i]};" else s"work[$i] = ntt_in_buf[$i];")
+    val romAssignments = groups.zipWithIndex.flatMap { case (group, pc) =>
+      group.zipWithIndex.flatMap { case (operation, lane) =>
+        val slot = pc * lanes + lane
+        operation match
+          case Butterfly(left, right) => Vector(s"op_kind[$slot]=2'd1; op_a[$slot]=10'd$left; op_b[$slot]=10'd$right;")
+          case Multiply(index, constant) => Vector(s"op_kind[$slot]=2'd2; op_a[$slot]=10'd$index; op_constant[$slot]=${hex(constant)};")
+      }
+    }
     val readyPort = if inverse then "" else "  output io_ready,\n"
-    val readyAssign = if inverse then "" else "  assign io_ready = io_enable && !output_active;"
+    val readyAssign = if inverse then "" else "  assign io_ready = io_enable && !output_active && !executing && !finishing;"
     s"""// Generated HOGE 1024-point ${if inverse then "INTT" else "NTT"}.
        |/* verilator lint_off BLKSEQ */
        |/* verilator lint_off UNUSEDSIGNAL */
@@ -152,22 +250,36 @@ object HogeSystemVerilog:
        |  output reg [${lanes * outputWidth - 1}:0] io_out
        |);
        |$arithmetic
-       |  reg [31:0] intt_in_buf [0:1023]; reg [63:0] intt_out_buf [0:1023];
-       |  reg [63:0] ntt_in_buf [0:1023]; reg [63:0] ntt_out_buf [0:1023];
-       |  reg [63:0] work [0:1023]; reg [63:0] temp; integer i,input_count,output_count; reg output_active;
+       |  localparam integer PROGRAM_LENGTH = ${groups.size};
+       |  localparam integer PROGRAM_SLOTS = $slots;
+       |  reg [31:0] intt_in_buf [0:1023]; reg [63:0] ntt_in_buf [0:1023];
+       |  reg [63:0] work [0:1023];
+       |  reg [1:0] op_kind [0:PROGRAM_SLOTS-1]; reg [9:0] op_a [0:PROGRAM_SLOTS-1]; reg [9:0] op_b [0:PROGRAM_SLOTS-1]; reg [63:0] op_constant [0:PROGRAM_SLOTS-1];
+       |  integer i,lane,input_count,output_count,pc,slot; reg output_active,executing,finishing;
        |$readyAssign
-       |  task automatic compute_transform; begin
-       |${lines(body ++ stores,4)}
-       |  end endtask
+       |  initial begin
+       |    for(i=0;i<PROGRAM_SLOTS;i=i+1) begin op_kind[i]=0; op_a[i]=0; op_b[i]=0; op_constant[i]=0; end
+       |${lines(romAssignments,4)}
+       |  end
        |  always @(posedge clock) begin
-       |    if(reset) begin io_validout<=0; input_count<=0; output_count<=0; output_active<=0; io_out<=0; end
+       |    if(reset) begin io_validout<=0; input_count<=0; output_count<=0; pc<=0; output_active<=0; executing<=0; finishing<=0; io_out<=0; for(i=0;i<1024;i=i+1) work[i]<=0; end
        |    else begin io_validout<=0;
-       |      if(output_active) begin io_validout<=1;
+       |      if(executing) begin
+       |        for(lane=0;lane<$lanes;lane=lane+1) begin slot=pc*$lanes+lane; case(op_kind[slot])
+       |          2'd1: begin work[op_a[slot]]<=hoge_add(work[op_a[slot]],work[op_b[slot]]); work[op_b[slot]]<=hoge_sub(work[op_a[slot]],work[op_b[slot]]); end
+       |          2'd2: work[op_a[slot]]<=hoge_mul(work[op_a[slot]],op_constant[slot]);
+       |          default: begin end
+       |        endcase end
+       |        if(pc==PROGRAM_LENGTH-1) begin pc<=0; executing<=0; finishing<=1; end else pc<=pc+1;
+       |      end else if(finishing) begin finishing<=0; output_active<=1; output_count<=0;
+       |      end else if(output_active) begin io_validout<=1;
        |${lines(output,8)}
        |        if(output_count==$cycles-1) begin output_count<=0; output_active<=0; end else output_count<=output_count+1; end
-       |      if(io_enable && !output_active) begin
+       |      else if(io_enable) begin
        |${lines(capture,8)}
-       |        if(input_count==$cycles-1) begin input_count<=0; compute_transform(); output_count<=0; output_active<=1; end else input_count<=input_count+1; end
+       |        if(input_count==$cycles-1) begin input_count<=0;
+       |${lines(initializeWork,10)}
+       |          pc<=0; executing<=1; end else input_count<=input_count+1; end
        |    end
        |  end
        |endmodule
