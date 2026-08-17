@@ -110,30 +110,47 @@ object YataMicrocodedSystemVerilog:
     val forward = bundle(forwardProgram(logSize, tables), lanes)
     require(inverse.size * (if profile == ProfileName.F300 then 2 else 1) < 1900)
     require(forward.size * (if profile == ProfileName.F300 then 2 else 1) < 1900)
-    def operation(op: MicroOp): Vector[String] = op.kind match
-      case 1 => Vector(s"work[${op.left}]<=yata_add(work[${op.left}],work[${op.right}]);", s"work[${op.right}]<=yata_sub(work[${op.left}],work[${op.right}]);")
-      case 2 => Vector(s"work[${op.left}]<=yata_add(work[${op.left}],work[${op.right}]);", s"work[${op.right}]<=work[${op.left}]-work[${op.right}];")
-      case 3 => Vector(s"work[${op.left}]<=yata_sredc(work[${op.left}]+work[${op.right}]);", s"work[${op.right}]<=yata_sredc(work[${op.left}]-work[${op.right}]);")
-      case 4 => Vector(s"work[${op.left}]<=yata_cmul(work[${op.left}],2'd${op.radixLog},2'd${op.number});")
-      case 5 => Vector(s"work[${op.left}]<=work[${op.left}]+yata_cmul(work[${op.right}],3,2);", s"work[${op.right}]<=work[${op.left}]-yata_cmul(work[${op.right}],3,2);")
-      case 6 => Vector(s"work[${op.left}]<=yata_cmul(work[${op.left}],3,1)+yata_cmul(work[${op.right}],3,3);", s"work[${op.right}]<=yata_cmul(work[${op.left}],3,3)+yata_cmul(work[${op.right}],3,1);")
-      case 7 => Vector(s"work[${op.left}]<=work[${op.left}]-yata_cmul(work[${op.right}],2,1);", s"work[${op.right}]<=work[${op.left}]+yata_cmul(work[${op.right}],2,1);")
-      case 8 => Vector(s"work[${op.left}]<=yata_add(work[${op.left}],work[${op.right}]);", s"work[${op.right}]<=-yata_cmul(work[${op.left}]-work[${op.right}],3,2);")
-      case 9 => Vector(s"work[${op.left}]<=-yata_cmul(work[${op.left}],3,3)-yata_cmul(work[${op.right}],3,1);", s"work[${op.right}]<=-yata_cmul(work[${op.left}],3,1)-yata_cmul(work[${op.right}],3,3);")
-      case 10 => Vector(s"work[${op.left}]<=yata_mul(yata_sword(work[${op.left}]),${lit(op.constant)});")
-      case _ => Vector.empty
-    def cases(groups: Vector[Vector[MicroOp]]): String = groups.zipWithIndex.map { case (group, pc) =>
-      s"$pc: begin\n${lines(group.flatMap(operation),12)}\n          end"
+    def w(index: Int) = s"w$index"
+    def setup(op: MicroOp, lane: Int): Vector[String] = Vector(
+      s"lane_kind_$lane=4'd${op.kind};",
+      s"lane_a_$lane=${w(op.left)};",
+      s"lane_b_$lane=${w(op.right)};",
+      s"lane_constant_$lane=${lit(op.constant)};",
+      s"lane_radix_$lane=2'd${op.radixLog};",
+      s"lane_number_$lane=2'd${op.number};"
+    )
+    def writeback(op: MicroOp, lane: Int): Vector[String] =
+      if op.kind == 4 || op.kind == 10 then Vector(s"${w(op.left)}<=lane_out_a_$lane;")
+      else Vector(s"${w(op.left)}<=lane_out_a_$lane;", s"${w(op.right)}<=lane_out_b_$lane;")
+    def cases(groups: Vector[Vector[MicroOp]], render: (MicroOp, Int) => Vector[String]): String = groups.zipWithIndex.map { case (group, pc) =>
+      s"$pc: begin\n${lines(group.zipWithIndex.flatMap((op, lane) => render(op, lane)),12)}\n          end"
     }.mkString("\n")
     val ports = Vector("input clock", "input reset", "input io_intt_validin") ++ Vector.tabulate(lanes)(i => s"input [31:0] io_intt_in_$i") ++
       Vector.tabulate(lanes)(i => s"output reg [26:0] io_intt_out_$i") ++ Vector("output reg io_intt_validout", "input io_ntt_validin") ++
       Vector.tabulate(lanes)(i => s"input [26:0] io_ntt_in_$i") ++ Vector.tabulate(lanes)(i => s"output reg [31:0] io_ntt_out_$i") ++ Vector("output reg io_ntt_validout")
-    val captureI = Vector.tabulate(lanes)(i => s"intt_input[$i*$cycles+input_count]=io_intt_in_$i;")
-    val captureN = Vector.tabulate(lanes)(i => s"ntt_input[input_count*$lanes+$i]=io_ntt_in_$i;")
-    val initializeI = Vector.tabulate(size)(i => s"work[$i]={{27{1'b0}},intt_input[$i][26:0]};")
-    val initializeN = Vector.tabulate(size)(i => s"work[$i]={{27{ntt_input[$i][26]}},ntt_input[$i]};")
-    val outputI = Vector.tabulate(lanes)(i => s"io_intt_out_$i<=work[output_count*$lanes+$i][26:0];")
-    val outputN = Vector.tabulate(lanes)(i => s"io_ntt_out_$i<=yata_modswitch(work[$i*$cycles+output_count]);")
+    val inputDeclarations = Vector.tabulate(size)(i => s"reg [31:0] intt$i; reg signed [26:0] ntt$i;")
+    val workDeclarations = Vector.tabulate(size)(i => s"reg signed [53:0] ${w(i)};")
+    val modswitchDeclarations = Vector.tabulate(size)(i => s"wire [31:0] torus$i;")
+    val modswitchInstances = Vector.tabulate(size)(i => s"YataModSwitch modswitch_$i(${w(i)},torus$i);")
+    val laneDeclarations = Vector.tabulate(lanes)(i => s"reg [3:0] lane_kind_$i; reg signed [53:0] lane_a_$i,lane_b_$i; reg signed [26:0] lane_constant_$i; reg [1:0] lane_radix_$i,lane_number_$i; wire signed [53:0] lane_out_a_$i,lane_out_b_$i;")
+    val laneDefaults = Vector.tabulate(lanes)(i => s"lane_kind_$i=0;lane_a_$i=0;lane_b_$i=0;lane_constant_$i=0;lane_radix_$i=0;lane_number_$i=0;")
+    val laneInstances = Vector.tabulate(lanes)(i => s"YataMicroLane lane_$i(lane_kind_$i,lane_a_$i,lane_b_$i,lane_constant_$i,lane_radix_$i,lane_number_$i,lane_out_a_$i,lane_out_b_$i);")
+    val initializeI = Vector.tabulate(size)(i => s"${w(i)}<={{27{1'b0}},intt$i[26:0]};")
+    val initializeN = Vector.tabulate(size)(i => s"${w(i)}<={{27{ntt$i[26]}},ntt$i};")
+    def inputCases(isIntt: Boolean): String = (0 until cycles).map { cycle =>
+      val assignments = Vector.tabulate(lanes) { lane =>
+        val index = if isIntt then lane * cycles + cycle else cycle * lanes + lane
+        s"${if isIntt then s"intt$index" else s"ntt$index"}=${if isIntt then s"io_intt_in_$lane" else s"io_ntt_in_$lane"};"
+      }
+      s"$cycle: begin\n${lines(assignments,10)}\n        end"
+    }.mkString("\n")
+    def outputCases(isIntt: Boolean): String = (0 until cycles).map { cycle =>
+      val assignments = Vector.tabulate(lanes) { lane =>
+        val index = if isIntt then cycle * lanes + lane else lane * cycles + cycle
+        if isIntt then s"io_intt_out_$lane<=${w(index)}[26:0];" else s"io_ntt_out_$lane<=torus$index;"
+      }
+      s"$cycle: begin\n${lines(assignments,10)}\n        end"
+    }.mkString("\n")
     s"""// Generated by NGen's microcoded YATA radix-8 backend.
        |/* verilator lint_off BLKSEQ */
        |/* verilator lint_off UNUSEDSIGNAL */
@@ -142,33 +159,51 @@ object YataMicrocodedSystemVerilog:
        |module $top(
        |${ports.map("  " + _).mkString(",\n")}
        |);
-       |  localparam signed [53:0] YATA_P=54'sd40960001; localparam signed [63:0] YATA_SCALE=64'sd7036874245;
        |  localparam integer I_LENGTH=${inverse.size}; localparam integer F_LENGTH=${forward.size}; localparam integer STEP_GAP=${if profile == ProfileName.F300 then 1 else 0};
-       |  reg [31:0] intt_input[0:$size-1]; reg signed [26:0] ntt_input[0:$size-1]; reg signed [53:0] work[0:$size-1];
-       |  integer i,pc,input_count,output_count,stall_count; reg executing,inverse_operation,finishing,output_intt,output_ntt;
-       |  function automatic signed [26:0] yata_sword(input signed [53:0] x); begin yata_sword=x[26:0]; end endfunction
-       |  function automatic signed [26:0] yata_add(input signed [53:0] a,input signed [53:0] b); reg signed [53:0] v; begin v=a+b; if(v>=YATA_P)v=v-YATA_P; else if(v<=-YATA_P)v=v+YATA_P; yata_add=v; end endfunction
-       |  function automatic signed [26:0] yata_sub(input signed [53:0] a,input signed [53:0] b); reg signed [53:0] v; begin v=a-b; if(v>=YATA_P)v=v-YATA_P; else if(v<=-YATA_P)v=v+YATA_P; yata_sub=v; end endfunction
-       |  function automatic signed [26:0] yata_sredc(input signed [53:0] a); reg [26:0] a0; reg signed [26:0] a1,m,t1; reg signed [53:0] mw,tw; begin a0=a[26:0];a1=a[53:27];mw=-(({27'd0,a0}*625)<<<16)+{27'd0,a0};m=mw[26:0];tw=(($$signed(m)*625)<<<16)+$$signed(m);t1=tw[53:27];yata_sredc=a1-t1;end endfunction
-       |  function automatic signed [26:0] yata_mul(input signed [26:0] a,input signed [26:0] b); begin yata_mul=yata_sredc($$signed(a)*$$signed(b)); end endfunction
-       |  function automatic signed [53:0] yata_cmul(input signed [53:0] a,input [1:0] rb,input [1:0] num); begin if(rb==2&&num==1)yata_cmul=(a*25)<<<8;else if(rb==3&&num==1)yata_cmul=(a*5)<<<4;else if(rb==3&&num==2)yata_cmul=(a*25)<<<8;else if(rb==3&&num==3)yata_cmul=(a*125)<<<12;else yata_cmul=a;end endfunction
-       |  function automatic [31:0] yata_modswitch(input signed [53:0] a); reg signed [26:0] r; reg [63:0] p; reg [95:0] s; begin r=yata_sword(a);p=(r<0)?r+YATA_P:r;s=((p*YATA_SCALE)+96'd33554432)>>26;yata_modswitch=s[31:0];end endfunction
+       |${lines(inputDeclarations ++ workDeclarations ++ modswitchDeclarations ++ laneDeclarations ++ laneInstances ++ modswitchInstances,2)}
+       |  integer pc,input_count,output_count,stall_count; reg executing,inverse_operation,finishing,output_intt,output_ntt;
+       |  always @(*) begin ${lines(laneDefaults,4)} if(inverse_operation)begin case(pc)
+       |${cases(inverse,setup)}
+       |  endcase end else begin case(pc)
+       |${cases(forward,setup)}
+       |  endcase end end
        |  always @(posedge clock) begin
        |    if(reset)begin io_intt_validout<=0;io_ntt_validout<=0;input_count<=0;output_count<=0;pc<=0;stall_count<=0;executing<=0;finishing<=0;output_intt<=0;output_ntt<=0;end else begin io_intt_validout<=0;io_ntt_validout<=0;
        |      if(executing)begin if(stall_count>0)stall_count<=stall_count-1;else begin
        |        if(inverse_operation)begin case(pc)
-       |${cases(inverse)}
+       |${cases(inverse,writeback)}
        |        endcase end else begin case(pc)
-       |${cases(forward)}
+       |${cases(forward,writeback)}
        |        endcase end
        |        if(pc==(inverse_operation?I_LENGTH:F_LENGTH)-1)begin pc<=0;executing<=0;finishing<=1;end else begin pc<=pc+1;stall_count<=STEP_GAP;end end
        |      end else if(finishing)begin finishing<=0;if(inverse_operation)output_intt<=1;else output_ntt<=1;output_count<=0;
-       |      end else if(output_intt)begin io_intt_validout<=1;${lines(outputI,8)} if(output_count==$cycles-1)begin output_intt<=0;output_count<=0;end else output_count<=output_count+1;
-       |      end else if(output_ntt)begin io_ntt_validout<=1;${lines(outputN,8)} if(output_count==$cycles-1)begin output_ntt<=0;output_count<=0;end else output_count<=output_count+1;
-       |      end else if(io_intt_validin)begin ${lines(captureI,8)} if(input_count==$cycles-1)begin input_count<=0;${lines(initializeI,8)} inverse_operation<=1;pc<=0;stall_count<=0;executing<=1;end else input_count<=input_count+1;
-       |      end else if(io_ntt_validin)begin ${lines(captureN,8)} if(input_count==$cycles-1)begin input_count<=0;${lines(initializeN,8)} inverse_operation<=0;pc<=0;stall_count<=0;executing<=1;end else input_count<=input_count+1; end
+       |      end else if(output_intt)begin io_intt_validout<=1;case(output_count) ${outputCases(true)} endcase if(output_count==$cycles-1)begin output_intt<=0;output_count<=0;end else output_count<=output_count+1;
+       |      end else if(output_ntt)begin io_ntt_validout<=1;case(output_count) ${outputCases(false)} endcase if(output_count==$cycles-1)begin output_ntt<=0;output_count<=0;end else output_count<=output_count+1;
+       |      end else if(io_intt_validin)begin case(input_count) ${inputCases(true)} endcase if(input_count==$cycles-1)begin input_count<=0;${lines(initializeI,8)} inverse_operation<=1;pc<=0;stall_count<=0;executing<=1;end else input_count<=input_count+1;
+       |      end else if(io_ntt_validin)begin case(input_count) ${inputCases(false)} endcase if(input_count==$cycles-1)begin input_count<=0;${lines(initializeN,8)} inverse_operation<=0;pc<=0;stall_count<=0;executing<=1;end else input_count<=input_count+1; end
        |    end
        |  end
+       |endmodule
+       |
+       |module YataMicroLane(input [3:0] kind,input signed [53:0] a,input signed [53:0] b,input signed [26:0] constant,input [1:0] radix,input [1:0] number,output reg signed [53:0] out_a,output reg signed [53:0] out_b);
+       |  localparam signed [53:0] P=54'sd40960001;
+       |  function automatic signed [26:0] addmod(input signed [53:0] x,input signed [53:0] y);reg signed [53:0]v;begin v=x+y;if(v>=P)v=v-P;else if(v<=-P)v=v+P;addmod=v;end endfunction
+       |  function automatic signed [26:0] submod(input signed [53:0] x,input signed [53:0] y);reg signed [53:0]v;begin v=x-y;if(v>=P)v=v-P;else if(v<=-P)v=v+P;submod=v;end endfunction
+       |  function automatic signed [26:0] sredc(input signed [53:0] x);reg[26:0]a0;reg signed[26:0]a1,m,t1;reg signed[53:0]mw,tw;begin a0=x[26:0];a1=x[53:27];mw=-(({27'd0,a0}*625)<<<16)+{27'd0,a0};m=mw[26:0];tw=(($$signed(m)*625)<<<16)+$$signed(m);t1=tw[53:27];sredc=a1-t1;end endfunction
+       |  function automatic signed [26:0] mulredc(input signed [26:0] x,input signed [26:0] y);begin mulredc=sredc($$signed(x)*$$signed(y));end endfunction
+       |  function automatic signed [53:0] cmul(input signed [53:0] x,input[1:0]r,input[1:0]n);begin if(r==2&&n==1)cmul=(x*25)<<<8;else if(r==3&&n==1)cmul=(x*5)<<<4;else if(r==3&&n==2)cmul=(x*25)<<<8;else if(r==3&&n==3)cmul=(x*125)<<<12;else cmul=x;end endfunction
+       |  always @(*) begin out_a=0;out_b=0;case(kind)
+       |    1:begin out_a=addmod(a,b);out_b=submod(a,b);end 2:begin out_a=addmod(a,b);out_b=a-b;end 3:begin out_a=sredc(a+b);out_b=sredc(a-b);end
+       |    4:out_a=cmul(a,radix,number);5:begin out_a=a+cmul(b,3,2);out_b=a-cmul(b,3,2);end 6:begin out_a=cmul(a,3,1)+cmul(b,3,3);out_b=cmul(a,3,3)+cmul(b,3,1);end
+       |    7:begin out_a=a-cmul(b,2,1);out_b=a+cmul(b,2,1);end 8:begin out_a=addmod(a,b);out_b=-cmul(a-b,3,2);end 9:begin out_a=-cmul(a,3,3)-cmul(b,3,1);out_b=-cmul(a,3,1)-cmul(b,3,3);end
+       |    10:out_a=mulredc(a[26:0],constant);default:begin end endcase end
+       |endmodule
+       |
+       |module YataModSwitch(input signed [53:0] value,output [31:0] torus);
+       |  localparam signed [53:0] P=54'sd40960001; localparam [63:0] SCALE=64'd7036874245;
+       |  reg signed [26:0] residue; reg [63:0] positive; reg [95:0] scaled;
+       |  always @(*) begin residue=value[26:0];positive=(residue<0)?residue+P:residue;scaled=((positive*SCALE)+96'd33554432)>>26;end
+       |  assign torus=scaled[31:0];
        |endmodule
        |/* verilator lint_on WIDTHTRUNC */
        |/* verilator lint_on WIDTHEXPAND */

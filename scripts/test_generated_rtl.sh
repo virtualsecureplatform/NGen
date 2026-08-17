@@ -13,3 +13,11 @@ verilator --cc --exe --build --top-module main \
   "${run_dir}/design.sv" \
   "${repo_root}/tests/rtl/generic_ntt_q17_tb.cpp"
 "${run_dir}/obj/Vmain"
+
+sbt --error "run -n 4 -k 4 -r 1 -q 12289 -root 4134 -profile baseline -o ${run_dir}/design16.sv ntt"
+verilator --lint-only --Wall --top-module main "${run_dir}/design16.sv"
+verilator --cc --exe --build --top-module main \
+  --Mdir "${run_dir}/obj16" \
+  "${run_dir}/design16.sv" \
+  "${repo_root}/tests/rtl/generic_ntt_q12289_tb.cpp"
+"${run_dir}/obj16/Vmain"

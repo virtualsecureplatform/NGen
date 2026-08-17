@@ -10,5 +10,5 @@ class KyberSystemVerilogSpec extends AnyFunSuite:
     assert(rtl.contains("input start_fntt"))
     assert(rtl.contains("input start_intt"))
     assert(rtl.contains("output reg done"))
-    assert(rtl.contains("12'd1729"))
+    assert(rtl.contains("KYBER_QINV = 16'd3327"))
     assert(!rtl.contains(" % "))

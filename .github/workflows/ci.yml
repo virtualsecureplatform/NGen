@@ -19,5 +19,7 @@ jobs:
         run: sbt test assembly
       - name: Generated RTL simulation
         run: scripts/test_generated_rtl.sh
+      - name: Yosys smoke qualification
+        run: scripts/test_yosys.sh
       - name: Launcher smoke test
         run: bash ngen.bat version

@@ -52,7 +52,7 @@ object Main:
     val direction = config.direction match
       case Direction.Forward => "forward NTT"
       case Direction.Inverse => "inverse NTT"
-      case Direction.Both => "combined forward/inverse RAINTT"
+      case Direction.Both => if config.domain.name == "kyber256" then "combined Kyber forward/inverse PE" else "combined forward/inverse RAINTT"
     println(s"Transform: $direction")
     println(s"Domain: ${config.domain.name}")
     println(s"Size: ${config.domain.size} (2^${config.domain.logSize})")
@@ -74,7 +74,7 @@ object Main:
         val output = Path.of(config.output.getOrElse("KyberHPM1PE.v"))
         Option(output.getParent).foreach(Files.createDirectories(_))
         Files.writeString(output, KyberSystemVerilog.emit(config.top.getOrElse("KyberHPM1PE")))
-        writePresetArtifacts(config, output, "KyberBarrett", 256, 256, KyberSystemVerilog.InverseCycles + 2, KyberSystemVerilog.InverseCycles)
+        writePresetArtifacts(config, output, "KyberMontgomery", 256, 256, KyberSystemVerilog.InverseCycles + 2, KyberSystemVerilog.InverseCycles)
         println(s"Written design in $output.")
         return true
       require(Set("yata8", "yata64", "yata512")(config.domain.name), "raintt requires a YATA preset")
@@ -108,9 +108,9 @@ object Main:
       Option(output.getParent).foreach(Files.createDirectories(_))
       val inverse = config.direction == Direction.Inverse
       val top = config.top.getOrElse(if inverse then "INTTWrap" else "NTTWrap")
-      val rtl = if inverse then HogeSystemVerilog.emitStreamingIntt(top) else HogeSystemVerilog.emitStreamingNtt(top)
+      val rtl = if inverse then HogeSystemVerilog.emitStreamingIntt(top, config.profile) else HogeSystemVerilog.emitStreamingNtt(top, config.profile)
       Files.writeString(output, rtl)
-      val bundles = HogeSystemVerilog.streamingBundles(inverse)
+      val bundles = HogeSystemVerilog.streamingBundles(inverse, config.profile)
       writePresetArtifacts(config, output, "Goldilocks", 32, 32, bundles + 2, bundles)
       println(s"Written design in $output.")
       true
@@ -158,7 +158,8 @@ object Main:
         case Command.Generate(config) =>
           printPlan(config)
           if config.check then check(config)
-          if !emit(config) then println("RTL emission for this transform is not implemented yet.")
+          if !emit(config) then
+            throw new IllegalArgumentException(s"${config.domain.name} does not support ${config.direction.toString.toLowerCase} RTL emission")
     catch
       case error: IllegalArgumentException =>
         Console.err.println(s"Error: ${error.getMessage}")

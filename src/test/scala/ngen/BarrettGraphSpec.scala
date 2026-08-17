@@ -27,3 +27,10 @@ class BarrettGraphSpec extends AnyFunSuite:
     val f300 = GenericNttGraph.build(domain, inverse = true, PipelineProfile.F300)
     assert(baseline.evaluate(values) == f300.evaluate(values))
     assert(f300.latency > baseline.latency)
+
+  test("generic Barrett graph supports the N=16 q=12289 release vector"):
+    val q12289 = NttDomain("q12289", 16, Modulus(12289), 4134, TransformShape.Cyclic)
+    val input = Vector.tabulate(16)(i => BigInt(i * 37 + 11))
+    val graph = GenericNttGraph.build(q12289, inverse = false, PipelineProfile.Baseline)
+    val values = input.indices.map(i => s"i$i" -> input(i)).toMap
+    assert(graph.evaluate(values) == ReferenceNtt.forward(q12289, input))
