@@ -2,7 +2,7 @@ package ngen
 
 import ngen.algebra.TransformShape
 import ngen.cli.{Cli, Command, Direction}
-import ngen.rtl.{ProfileName, ReductionChoice, TransposeKind}
+import ngen.rtl.{ProfileName, ReductionChoice, StreamProtocol, TransposeKind}
 import org.scalatest.funsuite.AnyFunSuite
 
 class CliSpec extends AnyFunSuite:
@@ -88,4 +88,10 @@ class CliSpec extends AnyFunSuite:
       case Command.Generate(config) =>
         assert(config.radix == 4)
         assert(config.peCount.contains(1))
+      case other => fail(s"expected generation command, got $other")
+
+  test("custom streamed domains accept ready-valid control"):
+    val command = Cli.parse(Seq("-n", "3", "-k", "1", "-q", "17", "-root", "9", "-protocol", "ready-valid", "ntt"))
+    command match
+      case Command.Generate(config) => assert(config.protocol == StreamProtocol.ReadyValid)
       case other => fail(s"expected generation command, got $other")

@@ -8,7 +8,7 @@ final case class PeButterflyStep(leftSlot: Int, rightSlot: Int, twiddle: BigInt,
 enum PeOperationKind:
   case Scale, DecimationInTime, GentlemanSande, Dense
 final case class PeOperation(kind: PeOperationKind, inputs: Vector[Int], outputs: Vector[PeAssignment], steps: Vector[PeButterflyStep] = Vector.empty)
-final case class PeBundle(operations: Vector[PeOperation])
+final case class PeBundle(stage: Int, operations: Vector[PeOperation])
 
 final case class BankMapping(bankCount: Int, addressToBank: Vector[Int], addressToRow: Vector[Int]):
   require(bankCount > 0 && Integer.bitCount(bankCount) == 1)
@@ -129,7 +129,7 @@ object PeNttSchedule:
       case (factor, streamIndex) if field.normalize(factor) != 1 => scaleOperation(plan.outputAddresses(streamIndex), factor)
     }
 
-    def packStage(operations: Vector[PeOperation]): Vector[PeBundle] =
+    def packStage(stage: Int, operations: Vector[PeOperation]): Vector[PeBundle] =
       val pending = scala.collection.mutable.ArrayBuffer.from(operations)
       val result = scala.collection.mutable.ArrayBuffer.empty[PeBundle]
       while pending.nonEmpty do
@@ -146,9 +146,9 @@ object PeNttSchedule:
             pending.remove(index)
           else index += 1
         require(selected.nonEmpty, "bank scheduler could not make progress")
-        result += PeBundle(selected.toVector)
+        result += PeBundle(stage, selected.toVector)
       result.toVector
 
     val stageOperations = (if inputScale.nonEmpty then Vector(inputScale) else Vector.empty) ++ transformStages ++
       (if outputScale.nonEmpty then Vector(outputScale) else Vector.empty)
-    PeNttSchedule(plan, radixLog, peCount, mapping, stageOperations.flatMap(packStage))
+    PeNttSchedule(plan, radixLog, peCount, mapping, stageOperations.zipWithIndex.flatMap((operations,stage) => packStage(stage,operations)))

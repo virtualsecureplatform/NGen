@@ -70,11 +70,17 @@ beside each fixed twiddle and performs one final correction. `-root auto` discov
 root; use `-root auto -psi auto` for complete negacyclic transforms.
 
 The streamed backend uses `-pe <count>` reusable PEs, synchronous
-conflict-free banks, indexed address/twiddle control ROMs, and two coefficient
+conflict-free banks, packed per-PE address/twiddle control ROMs, and two coefficient
 buffers. One buffer can capture while the other executes, and output can drain
 one buffer while the next transform executes. The default PE count is
 `max(1, K/2)`. Multipliers therefore scale with PE count rather than with the
 number of scheduled butterflies.
+
+`-protocol ready-valid` replaces the transaction-start interface with
+per-chunk `in_valid/in_ready` and `out_valid/out_ready` handshakes. Input
+capture and output draining may stall independently; output data and
+`out_valid` remain stable under backpressure. The default remains
+`-protocol next` for compatibility.
 
 `-input-order` and `-output-order` accept `natural` or `bitreversed` for
 complete transforms. `-base-case <size>` selects an incomplete negacyclic
@@ -86,7 +92,10 @@ for fewer memory passes.
 
 `-transpose indexed` preserves the v0.1 compiled-address implementation.
 `-transpose switch` uses recursive HOGE `SwitchTransposeUnit` networks for
-YATA inverse input/forward output and HOGE inverse input streaming transposes.
+YATA inverse input/forward output, HOGE inverse input, and square custom
+streams where `K` equals the number of stream cycles. Custom input and output
+address plans are transformed with the physical networks, preserving natural
+external order.
 YATA supports switch transpose in both directions. HOGE currently supports it
 for `intt`; forward HOGE requires switches interleaved with the recursive
 HomGate butterfly pipeline and is rejected instead of silently changing the
@@ -129,6 +138,13 @@ couple NGen to the LLM candidate-selection runner.
   negacyclic, and incomplete NTT/INTT designs across multiple `K`, stream
   orders, pipeline profiles, Barrett/Montgomery/Shoup reductions, and an overlapped
   back-to-back transaction.
+
+The transform library also contains reference-checked composition groundwork
+for complete-transform RNS polynomial multiplication with CRT reconstruction,
+and general-size planning that classifies composite sizes for mixed-radix
+lowering and prime sizes for Bluestein lowering. These general-size plans are
+executable mathematical oracles; their RTL lowering is not yet exposed by the
+CLI.
 - `LLM-NTT-Examples` provides TFHEpp/cuHEpp/Kyber vector oracles for every
   characterized preset, including a standalone HOGE forward-NTT oracle.
 - The evaluator's `--with-yosys --yosys-candidate-only` path records flattened

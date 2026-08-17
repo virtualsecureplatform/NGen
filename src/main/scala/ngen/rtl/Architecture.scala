@@ -56,6 +56,15 @@ object TransposeKind:
     case "switch" => TransposeKind.Switch
     case other => throw new IllegalArgumentException(s"unknown transpose '$other'; expected indexed or switch")
 
+enum StreamProtocol:
+  case NextPulse, ReadyValid
+
+object StreamProtocol:
+  def parse(value: String): StreamProtocol = value.toLowerCase.replace("-", "") match
+    case "next" | "nextpulse" => StreamProtocol.NextPulse
+    case "readyvalid" | "rv" => StreamProtocol.ReadyValid
+    case other => throw new IllegalArgumentException(s"unknown stream protocol '$other'; expected next or ready-valid")
+
 enum PortDirection:
   case Input, Output
 

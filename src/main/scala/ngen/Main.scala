@@ -9,9 +9,10 @@ import ngen.backend.HogeSystemVerilog
 import ngen.backend.KyberSystemVerilog
 import ngen.backend.SwitchTransposeSystemVerilog
 import ngen.backend.PeStreamingNttSystemVerilog
+import ngen.backend.GenericSwitchTransposeWrapper
 import ngen.rtl.SwitchTransposeSpec
-import ngen.rtl.{Architecture, ArchitectureKind, GenericNttGraph, PeNttSchedule, PipelineProfile, Port, PortDirection, ReductionChoice, ReductionKind, StreamingContract, ValueFormat}
-import ngen.transform.{DataOrder, IncompleteNttPlan, NttPlan, StreamingNttPlan}
+import ngen.rtl.{Architecture, ArchitectureKind, GenericNttGraph, PeNttSchedule, PipelineProfile, Port, PortDirection, ReductionChoice, ReductionKind, StreamProtocol, StreamingContract, ValueFormat}
+import ngen.transform.{DataOrder, IncompleteNttPlan, NttPlan, StreamingNttPlan, SwitchBoundaryPlan}
 
 import java.nio.file.{Files, Path}
 
@@ -45,6 +46,7 @@ object Main:
       |  "direction": "$direction",
       |  "input_order": "${config.inputOrder.toString.toLowerCase}",
       |  "output_order": "${config.outputOrder.toString.toLowerCase}",
+      |  "protocol": "${if config.protocol == StreamProtocol.NextPulse then "next" else "ready-valid"}",
       |  "streaming_width": ${config.streamingWidth},
       |  "radix": ${config.radix},
       |  "profile": "$profile",
@@ -88,6 +90,7 @@ object Main:
     if config.domain.name != "custom" then
       require(config.architecture == ArchitectureKind.Auto, "preset backends select their architecture automatically")
       require(config.reduction == ReductionChoice.Auto, "preset backends select their field reduction automatically")
+      require(config.protocol == StreamProtocol.NextPulse, "preset backends currently use the next-pulse protocol")
       require(config.inputOrder == DataOrder.Natural && config.outputOrder == DataOrder.Natural,
         "preset backends currently expose natural-order streams only")
     if config.direction == Direction.Both then
@@ -143,7 +146,6 @@ object Main:
       println(s"Written design in $output.")
       true
     else if config.domain.name == "custom" then
-      require(config.transpose == ngen.rtl.TransposeKind.Indexed, "banked custom RTL currently supports indexed transpose only")
       val profile = PipelineProfile.named(config.profile)
       val inverse = config.direction == Direction.Inverse
       val output = Path.of(config.output.getOrElse("design.sv"))
@@ -152,7 +154,7 @@ object Main:
       val fullyParallelCompatible = config.streamingLog == config.domain.logSize &&
         config.inputOrder == DataOrder.Natural && config.outputOrder == DataOrder.Natural &&
         !config.domain.shape.isInstanceOf[ngen.algebra.TransformShape.IncompleteNegacyclic] &&
-        config.reduction != ReductionChoice.Montgomery && config.reduction != ReductionChoice.Shoup && config.radixLog == 1 && config.peCount.isEmpty
+        config.reduction != ReductionChoice.Montgomery && config.reduction != ReductionChoice.Shoup && config.radixLog == 1 && config.peCount.isEmpty && config.protocol == StreamProtocol.NextPulse && config.transpose == ngen.rtl.TransposeKind.Indexed
       val reductionKind = config.reduction match
         case ReductionChoice.Auto | ReductionChoice.Barrett => ReductionKind.Barrett
         case ReductionChoice.Montgomery => ReductionKind.Montgomery
@@ -176,12 +178,18 @@ object Main:
             ReductionKind.Barrett, profile
           )
         else
-          val plan: StreamingNttPlan = config.domain.shape match
+          val basePlan: StreamingNttPlan = config.domain.shape match
             case ngen.algebra.TransformShape.IncompleteNegacyclic(_) =>
               require(config.inputOrder == DataOrder.Natural && config.outputOrder == DataOrder.Natural,
                 "incomplete transforms currently expose natural-order streams only")
               IncompleteNttPlan(config.domain, inverse)
             case _ => NttPlan.radix2(config.domain, inverse, config.inputOrder, config.outputOrder)
+          val useSwitchTranspose = config.transpose == ngen.rtl.TransposeKind.Switch
+          if useSwitchTranspose then
+            require(config.protocol == StreamProtocol.NextPulse, "switch transpose currently requires the uninterrupted next-pulse protocol")
+            require(config.streamingWidth * config.streamingWidth == config.domain.size,
+              "switch transpose requires streaming width equal to stream cycle count")
+          val plan = if useSwitchTranspose then SwitchBoundaryPlan(basePlan, config.streamingWidth) else basePlan
           val requestedPeCount = config.peCount.getOrElse(math.max(1, config.streamingWidth / 2))
           val schedule = PeNttSchedule.build(plan, config.radixLog, requestedPeCount, config.streamingWidth)
           val metrics = PeStreamingNttSystemVerilog.metrics(schedule, config.streamingWidth, config.profile)
@@ -191,20 +199,30 @@ object Main:
             "bank_count_per_buffer" -> metrics.bankCount,
             "bank_depth" -> metrics.bankDepth,
             "coefficient_buffers" -> 2,
-            "operation_bundles" -> metrics.bundleCount
+            "operation_bundles" -> metrics.bundleCount,
+            "switch_transpose" -> (if useSwitchTranspose then 1 else 0)
           )
-          Files.writeString(output, PeStreamingNttSystemVerilog.emit(schedule, config.streamingWidth, top, config.profile, reductionKind))
+          val coreTop = if useSwitchTranspose then s"${top}Core" else top
+          val coreRtl = PeStreamingNttSystemVerilog.emit(schedule, config.streamingWidth, coreTop, config.profile, reductionKind, config.protocol)
+          Files.writeString(output,
+            if useSwitchTranspose then GenericSwitchTransposeWrapper.emit(coreRtl, top, coreTop, config.streamingWidth, config.domain.modulus.bitWidth)
+            else coreRtl)
+          val controlPorts = config.protocol match
+            case StreamProtocol.NextPulse => Vector(Port("next", PortDirection.Input, ValueFormat.Valid), Port("ready", PortDirection.Output, ValueFormat.Valid), Port("next_out", PortDirection.Output, ValueFormat.Valid))
+            case StreamProtocol.ReadyValid => Vector(Port("in_valid", PortDirection.Input, ValueFormat.Valid), Port("in_ready", PortDirection.Output, ValueFormat.Valid), Port("out_valid", PortDirection.Output, ValueFormat.Valid), Port("out_ready", PortDirection.Input, ValueFormat.Valid))
           Architecture(
             s"custom-${if inverse then "intt" else "ntt"}-banked-pe-radix${config.radix}",
-            Vector(Port("clock", PortDirection.Input, ValueFormat.Valid), Port("reset", PortDirection.Input, ValueFormat.Valid), Port("next", PortDirection.Input, ValueFormat.Valid), Port("ready", PortDirection.Output, ValueFormat.Valid)),
+            Vector(Port("clock", PortDirection.Input, ValueFormat.Valid), Port("reset", PortDirection.Input, ValueFormat.Valid)) ++ controlPorts,
             Vector.empty,
             Vector(ngen.rtl.MemorySpec("coefficient_buffers", metrics.bankDepth, ValueFormat.unsigned(config.domain.modulus.bitWidth), banks = 2 * metrics.bankCount, readLatency = 1)),
             Vector(ngen.rtl.CounterSpec("capture", metrics.inputCycles), ngen.rtl.CounterSpec("bundle", math.max(1, metrics.bundleCount)), ngen.rtl.CounterSpec("output", metrics.outputCycles)),
-            StreamingContract(config.domain.size, config.streamingWidth, metrics.inputCycles, metrics.outputCycles, metrics.latency, metrics.initiationInterval),
+            StreamingContract(config.domain.size, config.streamingWidth, metrics.inputCycles, metrics.outputCycles,
+              metrics.latency + (if useSwitchTranspose then 2 * (config.streamingWidth - 1) else 0), metrics.initiationInterval),
             reductionKind, profile
           )
       val metadata = DesignMetadata(Cli.Version, config.domain, architecture, if inverse then "inverse" else "forward", config.radix, output.toString,
-        config.inputOrder.toString.toLowerCase, config.outputOrder.toString.toLowerCase, architectureParameters)
+        config.inputOrder.toString.toLowerCase, config.outputOrder.toString.toLowerCase,
+        if config.protocol == StreamProtocol.NextPulse then "next" else "ready-valid", architectureParameters)
       val base = output.toString.stripSuffix(".sv").stripSuffix(".v")
       Files.writeString(Path.of(base + ".json"), metadata.toJson)
       if config.graph then Files.writeString(Path.of(base + ".graph.gv"), TransformDot.emit(config.domain, inverse, config.radixLog))

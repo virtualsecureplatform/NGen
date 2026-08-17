@@ -1,7 +1,7 @@
 package ngen.cli
 
 import ngen.algebra.{Domains, Modulus, NttDomain, TransformShape}
-import ngen.rtl.{ArchitectureKind, ProfileName, ReductionChoice, TransposeKind}
+import ngen.rtl.{ArchitectureKind, ProfileName, ReductionChoice, StreamProtocol, TransposeKind}
 import ngen.transform.DataOrder
 
 import scala.collection.mutable
@@ -24,6 +24,7 @@ final case class GeneratorConfig(
     transpose: TransposeKind,
     inputOrder: DataOrder,
     outputOrder: DataOrder,
+    protocol: StreamProtocol,
     graph: Boolean,
     rtlGraph: Boolean
 ):
@@ -69,6 +70,7 @@ object Cli:
       |  -transpose <t>  Streaming transpose: indexed (default) or switch.
       |  -input-order <o> Input stream order: natural (default) or bitreversed.
       |  -output-order <o> Output stream order: natural (default) or bitreversed.
+      |  -protocol <p>   Stream control: next (default) or ready-valid.
       |  -graph          Emit the transform-decomposition DOT graph.
       |  -rtlgraph       Emit the scheduled RTL DOT graph.
       |  -check          Run the mathematical round-trip check before generation.
@@ -121,6 +123,7 @@ object Cli:
     var transpose = TransposeKind.Indexed
     var inputOrder = DataOrder.Natural
     var outputOrder = DataOrder.Natural
+    var protocol = StreamProtocol.NextPulse
     var graph = false
     var rtlGraph = false
     var terminal: Option[String] = None
@@ -145,6 +148,7 @@ object Cli:
         case "-transpose" => transpose = TransposeKind.parse(requiredValue(args, "-transpose"))
         case "-input-order" => inputOrder = DataOrder.parse(requiredValue(args, "-input-order"))
         case "-output-order" => outputOrder = DataOrder.parse(requiredValue(args, "-output-order"))
+        case "-protocol" => protocol = StreamProtocol.parse(requiredValue(args, "-protocol"))
         case "-graph" => graph = true
         case "-rtlgraph" => rtlGraph = true
         case "-check" => check = true
@@ -222,6 +226,7 @@ object Cli:
             transpose,
             inputOrder,
             outputOrder,
+            protocol,
             graph,
             rtlGraph
           )

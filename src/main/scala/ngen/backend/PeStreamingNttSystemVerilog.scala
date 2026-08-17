@@ -1,7 +1,7 @@
 package ngen.backend
 
 import ngen.arithmetic.{BarrettField, ShoupField}
-import ngen.rtl.{PeNttSchedule, PeOperationKind, ProfileName, ReductionKind}
+import ngen.rtl.{PeNttSchedule, PeOperationKind, ProfileName, ReductionKind, StreamProtocol}
 
 object PeStreamingNttSystemVerilog:
   final case class Metrics(
@@ -32,7 +32,8 @@ object PeStreamingNttSystemVerilog:
       streamingWidth: Int,
       top: String,
       profile: ProfileName,
-      reduction: ReductionKind
+      reduction: ReductionKind,
+      protocol: StreamProtocol = StreamProtocol.NextPulse
   ): String =
     require(top.matches("[A-Za-z_][A-Za-z0-9_$]*"), s"invalid SystemVerilog module name: $top")
     require(Set(ReductionKind.Barrett, ReductionKind.Montgomery, ReductionKind.Shoup)(reduction))
@@ -83,7 +84,10 @@ object PeStreamingNttSystemVerilog:
            |endfunction""".stripMargin
       case _ => throw new IllegalArgumentException("unsupported reduction")
 
-    val ports = Vector("input clock", "input reset", "input next", "output ready", "output reg next_out") ++
+    val protocolPorts = protocol match
+      case StreamProtocol.NextPulse => Vector("input next", "output ready", "output reg next_out")
+      case StreamProtocol.ReadyValid => Vector("input in_valid", "output in_ready", "output reg out_valid", "input out_ready")
+    val ports = Vector("input clock", "input reset") ++ protocolPorts ++
       Vector.tabulate(streamingWidth)(lane => s"input [${width - 1}:0] i$lane") ++
       Vector.tabulate(streamingWidth)(lane => s"output reg [${width - 1}:0] o$lane")
     val rowWidth = math.max(1, 32 - Integer.numberOfLeadingZeros(mapping.depth - 1))
@@ -210,66 +214,113 @@ object PeStreamingNttSystemVerilog:
     }.mkString("\n          ")
 
     val bankWidth = math.max(1, Integer.numberOfTrailingZeros(mapping.bankCount))
-    val romDeclarations = (0 until peCount).flatMap { pe =>
-      Vector(s"reg op_valid_${pe}_rom[0:BUNDLE_COUNT-1];reg [1:0] op_kind_${pe}_rom[0:BUNDLE_COUNT-1];reg [${width - 1}:0] op_constant_${pe}_rom[0:BUNDLE_COUNT-1],op_precon_${pe}_rom[0:BUNDLE_COUNT-1];") ++
-        (0 until radix).map(slot => s"reg input_valid_${pe}_${slot}_rom[0:BUNDLE_COUNT-1];reg [${bankWidth - 1}:0] input_bank_${pe}_${slot}_rom[0:BUNDLE_COUNT-1];reg [${rowWidth - 1}:0] input_row_${pe}_${slot}_rom[0:BUNDLE_COUNT-1];") ++
-        (0 until radix).map(output => s"reg output_valid_${pe}_${output}_rom[0:BUNDLE_COUNT-1];reg [${bankWidth - 1}:0] output_bank_${pe}_${output}_rom[0:BUNDLE_COUNT-1];reg [${rowWidth - 1}:0] output_row_${pe}_${output}_rom[0:BUNDLE_COUNT-1];") ++
-        (if radix == 2 then Vector.empty else (0 until maxButterflySteps).map(step =>
-          s"reg [${width - 1}:0] step_constant_${pe}_${step}_rom[0:BUNDLE_COUNT-1],step_precon_${pe}_${step}_rom[0:BUNDLE_COUNT-1];"))
+    final case class ControlField(name: String, bits: Int)
+    val controlFields = Vector(ControlField("kind",2),ControlField("constant",width),ControlField("precon",width)) ++
+      (0 until radix).flatMap(slot => Vector(ControlField(s"input_valid_$slot",1),ControlField(s"input_bank_$slot",bankWidth),ControlField(s"input_row_$slot",rowWidth))) ++
+      (0 until radix).flatMap(output => Vector(ControlField(s"output_valid_$output",1),ControlField(s"output_bank_$output",bankWidth),ControlField(s"output_row_$output",rowWidth))) ++
+      (if radix == 2 then Vector.empty else (0 until maxButterflySteps).flatMap(step => Vector(ControlField(s"step_constant_$step",width),ControlField(s"step_precon_$step",width))))
+    val controlOffsets = controlFields.scanLeft(0)((offset,field) => offset + field.bits).dropRight(1).zip(controlFields).map { case (offset,field) => field.name -> offset }.toMap
+    val controlWidth = controlFields.map(_.bits).sum
+    def controlValue(operation: Option[ngen.rtl.PeOperation], fieldName: String): BigInt = fieldName match
+      case "kind" => operation.map(_.kind match
+        case PeOperationKind.Scale => 1
+        case PeOperationKind.DecimationInTime | PeOperationKind.Dense => 2
+        case PeOperationKind.GentlemanSande => 3).getOrElse(0)
+      case "constant" => encoded(operation.map(operationConstant).getOrElse(BigInt(0)))
+      case "precon" => shoup.prepare(operation.map(operationConstant).getOrElse(BigInt(0))).precondition
+      case name if name.startsWith("input_") =>
+        val parts = name.split("_")
+        val property = parts(1)
+        val slot = parts(2).toInt
+        val address = operation.flatMap(_.inputs.lift(slot))
+        property match
+          case "valid" => if address.isDefined then 1 else 0
+          case "bank" => address.map(mapping.bank).getOrElse(0)
+          case "row" => address.map(mapping.row).getOrElse(0)
+      case name if name.startsWith("output_") =>
+        val parts = name.split("_")
+        val property = parts(1)
+        val output = parts(2).toInt
+        val assignment = operation.flatMap(_.outputs.lift(output))
+        property match
+          case "valid" => if assignment.isDefined then 1 else 0
+          case "bank" => assignment.map(value => mapping.bank(value.address)).getOrElse(0)
+          case "row" => assignment.map(value => mapping.row(value.address)).getOrElse(0)
+      case name if name.startsWith("step_") =>
+        val parts = name.split("_")
+        val property = parts(1)
+        val step = parts(2).toInt
+        val twiddle = operation.flatMap(_.steps.lift(step)).map(_.twiddle).getOrElse(BigInt(0))
+        if property == "constant" then encoded(twiddle) else shoup.prepare(twiddle).precondition
+      case other => throw new IllegalArgumentException(s"unknown packed control field $other")
+    def packedControl(operation: Option[ngen.rtl.PeOperation]): BigInt = controlFields.foldLeft(BigInt(0)) { (record,field) =>
+      record | (controlValue(operation,field.name) << controlOffsets(field.name))
+    }
+    def alias(pe: Int, field: ControlField): String =
+      val range = if field.bits == 1 then s"[${controlOffsets(field.name)}]" else s"[${controlOffsets(field.name)} +: ${field.bits}]"
+      val declaration = if field.bits == 1 then "wire" else s"wire [${field.bits - 1}:0]"
+      val signalName = field.name match
+        case "kind" => s"op_kind_$pe"
+        case "constant" => s"op_constant_$pe"
+        case "precon" => s"op_precon_$pe"
+        case name if name.startsWith("input_") =>
+          val parts = name.split("_"); s"input_${parts(1)}_${pe}_${parts(2)}"
+        case name if name.startsWith("output_") =>
+          val parts = name.split("_"); s"output_${parts(1)}_${pe}_${parts(2)}"
+        case name if name.startsWith("step_") =>
+          val parts = name.split("_"); s"step_${parts(1)}_${pe}_${parts(2)}"
+      s"$declaration $signalName=control_$pe$range;"
+    val romDeclarations = (0 until peCount).map { pe =>
+      s"(* rom_style = \"distributed\" *) reg [${controlWidth - 1}:0] control_${pe}_rom[0:BUNDLE_COUNT-1];wire [${controlWidth - 1}:0] control_$pe=control_${pe}_rom[bundle_index];${controlFields.map(alias(pe,_)).mkString}"
     }.mkString("\n  ")
     val romInitializers = schedule.bundles.zipWithIndex.flatMap { case (bundle,bundleIndex) =>
-      (0 until peCount).flatMap { pe =>
-        val operation = bundle.operations.lift(pe)
-        val constant = operation.map(operationConstant).getOrElse(BigInt(0))
-        val header = Vector(
-          s"op_valid_${pe}_rom[$bundleIndex]=${if operation.isDefined then 1 else 0};",
-          s"op_kind_${pe}_rom[$bundleIndex]=${operation.map(_.kind match
-            case PeOperationKind.Scale => 1
-            case PeOperationKind.DecimationInTime => 2
-            case PeOperationKind.GentlemanSande => 3
-            case PeOperationKind.Dense => 2).getOrElse(0)};",
-          s"op_constant_${pe}_rom[$bundleIndex]=${literal(constant)};op_precon_${pe}_rom[$bundleIndex]=${precondition(constant)};"
-        )
-        val inputs = (0 until radix).map { slot =>
-          val address = operation.flatMap(_.inputs.lift(slot))
-          s"input_valid_${pe}_${slot}_rom[$bundleIndex]=${if address.isDefined then 1 else 0};input_bank_${pe}_${slot}_rom[$bundleIndex]=${bankWidth}'d${address.map(mapping.bank).getOrElse(0)};input_row_${pe}_${slot}_rom[$bundleIndex]=${rowWidth}'d${address.map(mapping.row).getOrElse(0)};"
-        }
-        val outputs = (0 until radix).map { output =>
-          val assignment = operation.flatMap(_.outputs.lift(output))
-          s"output_valid_${pe}_${output}_rom[$bundleIndex]=${if assignment.isDefined then 1 else 0};output_bank_${pe}_${output}_rom[$bundleIndex]=${bankWidth}'d${assignment.map(value => mapping.bank(value.address)).getOrElse(0)};output_row_${pe}_${output}_rom[$bundleIndex]=${rowWidth}'d${assignment.map(value => mapping.row(value.address)).getOrElse(0)};"
-        }
-        val stepConstants = if radix == 2 then Vector.empty else (0 until maxButterflySteps).map { step =>
-          val coefficient = operation.flatMap(_.steps.lift(step)).map(_.twiddle).getOrElse(BigInt(0))
-          s"step_constant_${pe}_${step}_rom[$bundleIndex]=${literal(coefficient)};step_precon_${pe}_${step}_rom[$bundleIndex]=${precondition(coefficient)};"
-        }
-        header ++ inputs ++ outputs ++ stepConstants
+      (0 until peCount).map { pe =>
+        val record = packedControl(bundle.operations.lift(pe))
+        s"control_${pe}_rom[$bundleIndex]=${controlWidth}'h${record.toString(16)};"
       }
     }.mkString("\n    ")
     def bankCase(bankSignal: String)(body: Int => String): String =
       (0 until mapping.bankCount).map(bank => s"${bankWidth}'d$bank:begin ${body(bank)} end").mkString(s"case($bankSignal)"," "," default:begin end endcase")
     val dynamicReadPorts = (for pe <- 0 until peCount; slot <- 0 until radix yield
-      s"if(input_valid_${pe}_${slot}_rom[bundle_index])begin ${bankCase(s"input_bank_${pe}_${slot}_rom[bundle_index]") { bank =>
-        s"if(exec_buffer)begin ${portName(1,bank,"read_enable")}=1;${portName(1,bank,"read_address")}=input_row_${pe}_${slot}_rom[bundle_index];end else begin ${portName(0,bank,"read_enable")}=1;${portName(0,bank,"read_address")}=input_row_${pe}_${slot}_rom[bundle_index];end"
+      s"if(input_valid_${pe}_${slot})begin ${bankCase(s"input_bank_${pe}_${slot}") { bank =>
+        s"if(exec_buffer)begin ${portName(1,bank,"read_enable")}=1;${portName(1,bank,"read_address")}=input_row_${pe}_${slot};end else begin ${portName(0,bank,"read_enable")}=1;${portName(0,bank,"read_address")}=input_row_${pe}_${slot};end"
       }} end").mkString(" ")
     val dynamicLoads = (0 until peCount).flatMap { pe =>
       val inputLoads = (0 until radix).map { slot =>
         val target = if radix == 2 then (if slot == 0 then s"pe_a_$pe" else s"pe_b_$pe") else s"pe_${pe}_in_$slot"
-        s"if(input_valid_${pe}_${slot}_rom[bundle_index])begin ${bankCase(s"input_bank_${pe}_${slot}_rom[bundle_index]") { bank =>
+        s"if(input_valid_${pe}_${slot})begin ${bankCase(s"input_bank_${pe}_${slot}") { bank =>
           s"if(exec_buffer)$target<=${portName(1,bank,"read_data")};else $target<=${portName(0,bank,"read_data")};"
         }} end else $target<=0;"
       }
       val controls =
-        if radix == 2 then Vector(s"pe_kind_$pe<=op_kind_${pe}_rom[bundle_index];pe_constant_$pe<=op_constant_${pe}_rom[bundle_index];pe_precon_$pe<=op_precon_${pe}_rom[bundle_index];")
-        else Vector(s"pe_kind_$pe<=op_kind_${pe}_rom[bundle_index];pe_scale_c_$pe<=op_constant_${pe}_rom[bundle_index];pe_scale_p_$pe<=op_precon_${pe}_rom[bundle_index];") ++
-          (0 until maxButterflySteps).map(step => s"pe_${pe}_step_c_$step<=step_constant_${pe}_${step}_rom[bundle_index];pe_${pe}_step_p_$step<=step_precon_${pe}_${step}_rom[bundle_index];")
+        if radix == 2 then Vector(s"pe_kind_$pe<=op_kind_$pe;pe_constant_$pe<=op_constant_$pe;pe_precon_$pe<=op_precon_$pe;")
+        else Vector(s"pe_kind_$pe<=op_kind_$pe;pe_scale_c_$pe<=op_constant_$pe;pe_scale_p_$pe<=op_precon_$pe;") ++
+          (0 until maxButterflySteps).map(step => s"pe_${pe}_step_c_$step<=step_constant_${pe}_$step;pe_${pe}_step_p_$step<=step_precon_${pe}_$step;")
       inputLoads ++ controls
     }.mkString(" ")
     val dynamicWritePorts = (for pe <- 0 until peCount; output <- 0 until radix yield
-      s"if(output_valid_${pe}_${output}_rom[bundle_index])begin ${bankCase(s"output_bank_${pe}_${output}_rom[bundle_index]") { bank =>
-        s"if(exec_buffer)begin ${portName(1,bank,"write_enable")}=1;${portName(1,bank,"write_address")}=output_row_${pe}_${output}_rom[bundle_index];${portName(1,bank,"write_data")}=pe_out_${pe}_$output;end else begin ${portName(0,bank,"write_enable")}=1;${portName(0,bank,"write_address")}=output_row_${pe}_${output}_rom[bundle_index];${portName(0,bank,"write_data")}=pe_out_${pe}_$output;end"
+      s"if(output_valid_${pe}_${output})begin ${bankCase(s"output_bank_${pe}_${output}") { bank =>
+        s"if(exec_buffer)begin ${portName(1,bank,"write_enable")}=1;${portName(1,bank,"write_address")}=output_row_${pe}_${output};${portName(1,bank,"write_data")}=pe_out_${pe}_$output;end else begin ${portName(0,bank,"write_enable")}=1;${portName(0,bank,"write_address")}=output_row_${pe}_${output};${portName(0,bank,"write_data")}=pe_out_${pe}_$output;end"
       }} end").mkString(" ")
 
     val resetOutputs = Vector.tabulate(streamingWidth)(lane => s"o$lane<=0;").mkString
+    val emptyBufferReady = "(buffer_0_state==EMPTY)||(buffer_1_state==EMPTY)"
+    val readyAssignment = protocol match
+      case StreamProtocol.NextPulse => s"assign ready=!capture_active&&($emptyBufferReady);"
+      case StreamProtocol.ReadyValid => s"assign in_ready=capture_active?1'b1:($emptyBufferReady);"
+    val firstInputAccepted = if protocol == StreamProtocol.NextPulse then "next&&ready" else "in_valid&&in_ready"
+    val continuingInputAccepted = if protocol == StreamProtocol.NextPulse then "1'b1" else "in_valid"
+    val resetProtocol = if protocol == StreamProtocol.NextPulse then "next_out<=0;" else "out_valid<=0;"
+    val defaultProtocol = if protocol == StreamProtocol.NextPulse then "next_out<=0;" else ""
+    val outputReadGuard = if protocol == StreamProtocol.NextPulse then "" else "&&!out_valid"
+    val outputAdvance = protocol match
+      case StreamProtocol.NextPulse =>
+        s"""case(output_count)$outputValueCases default:begin end endcase
+           |          if(output_count==0)next_out<=1;
+           |          if(output_count==STREAM_CYCLES-1)begin output_active<=0;output_prefetched<=0;output_count<=0;if(output_buffer)buffer_1_state<=EMPTY;else buffer_0_state<=EMPTY;end else output_count<=output_count+1;""".stripMargin
+      case StreamProtocol.ReadyValid =>
+        s"""if(!out_valid)begin case(output_count)$outputValueCases default:begin end endcase out_valid<=1;end
+           |          else if(out_ready)begin out_valid<=0;if(output_count==STREAM_CYCLES-1)begin output_active<=0;output_prefetched<=0;output_count<=0;if(output_buffer)buffer_1_state<=EMPTY;else buffer_0_state<=EMPTY;end else output_count<=output_count+1;end""".stripMargin
     s"""// Generated by NGen's reusable-PE banked streaming backend.
        |/* verilator lint_off DECLFILENAME */
        |/* verilator lint_off WIDTHEXPAND */
@@ -286,7 +337,7 @@ object PeStreamingNttSystemVerilog:
        |  $memories
        |  $romDeclarations
        |  $peDeclarations
-       |  assign ready=(buffer_0_state==EMPTY)||(buffer_1_state==EMPTY);
+       |  $readyAssignment
        |  function automatic [${width - 1}:0] mod_add(input [${width - 1}:0] a,input [${width - 1}:0] b);reg [$width:0] sum,reduced;begin sum={1'b0,a}+{1'b0,b};if(sum>=MODULUS_EXT)reduced=sum-MODULUS_EXT;else reduced=sum;mod_add=reduced[${width - 1}:0];end endfunction
        |  function automatic [${width - 1}:0] mod_sub(input [${width - 1}:0] a,input [${width - 1}:0] b);reg [$width:0] difference;begin if(a>=b)difference={1'b0,a}-{1'b0,b};else difference={1'b0,a}+MODULUS_EXT-{1'b0,b};mod_sub=difference[${width - 1}:0];end endfunction
        |  $multiplyFunction
@@ -296,30 +347,30 @@ object PeStreamingNttSystemVerilog:
        |  always @(*) begin
        |    $portDefaults
        |    if(!capture_active)begin
-       |      if(next&&ready)begin if(buffer_0_state==EMPTY)begin ${captureWrites(0,0)} end else begin ${captureWrites(1,0)} end end
-       |    end else begin case(capture_count)$captureCases default:begin end endcase end
+       |      if($firstInputAccepted)begin if(buffer_0_state==EMPTY)begin ${captureWrites(0,0)} end else begin ${captureWrites(1,0)} end end
+       |    end else if($continuingInputAccepted)begin case(capture_count)$captureCases default:begin end endcase end
        |    if(exec_active&&gap_count==0)begin
        |      if(exec_phase==0)begin $dynamicReadPorts end
        |      else if(exec_phase==2)begin $dynamicWritePorts end
        |    end
        |    if(output_active)begin
        |      if(!output_prefetched)begin case(output_count)$outputCurrentReadCases default:begin end endcase end
-       |      else if(output_count<STREAM_CYCLES-1)begin case(output_count)$outputNextReadCases default:begin end endcase end
+       |      else if((output_count<STREAM_CYCLES-1)$outputReadGuard)begin case(output_count)$outputNextReadCases default:begin end endcase end
        |    end
        |  end
        |  always @(posedge clock) begin
        |    $memoryPorts
        |  end
        |  always @(posedge clock) begin
-       |    if(reset)begin buffer_0_state<=EMPTY;buffer_1_state<=EMPTY;capture_active<=0;exec_active<=0;output_active<=0;output_prefetched<=0;capture_count<=0;bundle_index<=0;gap_count<=0;output_count<=0;exec_phase<=0;next_out<=0;$resetOutputs end
+       |    if(reset)begin buffer_0_state<=EMPTY;buffer_1_state<=EMPTY;capture_active<=0;exec_active<=0;output_active<=0;output_prefetched<=0;capture_count<=0;bundle_index<=0;gap_count<=0;output_count<=0;exec_phase<=0;$resetProtocol$resetOutputs end
        |    else begin
-       |      next_out<=0;
+       |      $defaultProtocol
        |      if(!capture_active)begin
-       |        if(next&&ready)begin
+       |        if($firstInputAccepted)begin
        |          if(buffer_0_state==EMPTY)begin capture_buffer<=0;buffer_0_state<=${if streamCycles == 1 then "READY_STATE" else "CAPTURING"};end else begin capture_buffer<=1;buffer_1_state<=${if streamCycles == 1 then "READY_STATE" else "CAPTURING"};end
        |          ${if streamCycles == 1 then "capture_active<=0;capture_count<=0;" else "capture_active<=1;capture_count<=1;"}
        |        end
-       |      end else begin
+       |      end else if($continuingInputAccepted)begin
        |        if(capture_count==STREAM_CYCLES-1)begin capture_active<=0;capture_count<=0;if(capture_buffer)buffer_1_state<=READY_STATE;else buffer_0_state<=READY_STATE;end else capture_count<=capture_count+1;
        |      end
        |      if(!exec_active)begin
@@ -338,11 +389,7 @@ object PeStreamingNttSystemVerilog:
        |        else if(buffer_1_state==DONE)begin output_active<=1;output_buffer<=1;output_count<=0;output_prefetched<=0;buffer_1_state<=OUTPUTTING;end
        |      end else begin
        |        if(!output_prefetched)output_prefetched<=1;
-       |        else begin
-       |          case(output_count)$outputValueCases default:begin end endcase
-       |          if(output_count==0)next_out<=1;
-       |          if(output_count==STREAM_CYCLES-1)begin output_active<=0;output_prefetched<=0;output_count<=0;if(output_buffer)buffer_1_state<=EMPTY;else buffer_0_state<=EMPTY;end else output_count<=output_count+1;
-       |        end
+       |        else begin $outputAdvance end
        |      end
        |    end
        |  end

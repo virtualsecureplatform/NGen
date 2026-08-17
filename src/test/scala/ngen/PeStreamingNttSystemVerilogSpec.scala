@@ -35,3 +35,12 @@ class PeStreamingNttSystemVerilogSpec extends AnyFunSuite:
     assert(radix2Metrics.latency == 55)
     val radix4 = PeNttSchedule.build(NttPlan.radix2(domain, inverse = false), 2, 1, 4)
     assert(PeStreamingNttSystemVerilog.metrics(radix4, 4, ProfileName.Baseline).latency == 31)
+
+  test("backend emits per-chunk ready-valid ports"):
+    val schedule = PeNttSchedule.build(NttPlan.radix2(domain, inverse = false), 1, 1, 4)
+    val rtl = PeStreamingNttSystemVerilog.emit(schedule, 4, "ReadyValidNtt", ProfileName.Baseline, ReductionKind.Shoup, ngen.rtl.StreamProtocol.ReadyValid)
+    assert(rtl.contains("input in_valid"))
+    assert(rtl.contains("output in_ready"))
+    assert(rtl.contains("output reg out_valid"))
+    assert(rtl.contains("input out_ready"))
+    assert(!rtl.contains("input next"))

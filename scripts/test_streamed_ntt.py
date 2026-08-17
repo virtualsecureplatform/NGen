@@ -168,10 +168,43 @@ endmodule
 """
 
 
+def ready_valid_testbench(width: int, lanes: int, inputs: list[int], outputs: list[int]) -> str:
+    cycles = len(inputs) // lanes
+    declarations = "\n".join(f"  reg [{width - 1}:0] i{lane}; wire [{width - 1}:0] o{lane};" for lane in range(lanes))
+    connections = ", ".join([".clock(clock)", ".reset(reset)", ".in_valid(in_valid)", ".in_ready(in_ready)",
+                              ".out_valid(out_valid)", ".out_ready(out_ready)"] +
+                             [f".i{lane}(i{lane})" for lane in range(lanes)] + [f".o{lane}(o{lane})" for lane in range(lanes)])
+    drive = []
+    for cycle in range(cycles):
+        assignments = " ".join(f"i{lane}={width}'d{inputs[cycle * lanes + lane]};" for lane in range(lanes))
+        drive.append(f"    @(negedge clock); in_valid=0; @(posedge clock); #1; while(!in_ready) begin @(posedge clock); #1; end @(negedge clock); {assignments} in_valid=1; @(posedge clock); #1;")
+    checks = []
+    for cycle in range(cycles):
+        expected_checks = " ".join(f"if(o{lane}!=={width}'d{outputs[cycle * lanes + lane]}) $fatal(1,\"ready-valid output mismatch\");" for lane in range(lanes))
+        checks.append(f"    while(!out_valid) begin @(posedge clock); #1; end {expected_checks}")
+        checks.append(f"    repeat(2) begin @(posedge clock); #1; if(!out_valid) $fatal(1,\"out_valid dropped under backpressure\"); {expected_checks} end")
+        checks.append("    @(negedge clock); out_ready=1; @(posedge clock); #1; @(negedge clock); out_ready=0;")
+    return f"""module test;
+  reg clock=0,reset=1,in_valid=0,out_ready=0;wire in_ready,out_valid;
+{declarations}
+  always #5 clock=~clock;
+  main dut({connections});
+  initial begin repeat(10000) @(posedge clock); $fatal(1,"timeout"); end
+  initial begin
+    repeat(2) @(posedge clock); @(negedge clock); reset=0;
+{chr(10).join(drive)}
+    @(negedge clock); in_valid=0;
+{chr(10).join(checks)}
+    $display("PASS streamed NTT ready-valid stalls");$finish;
+  end
+endmodule
+"""
+
+
 def run_case(run_dir: Path, domain: Domain, streaming_log: int, inverse: bool,
              input_order: str = "natural", output_order: str = "natural",
              profile: str = "baseline", architecture: str = "auto", reduction: str = "auto",
-             radix_log: int = 1, pe_count: int | None = None) -> None:
+             radix_log: int = 1, pe_count: int | None = None, transpose: str = "indexed") -> None:
     log_size = domain.size.bit_length() - 1
     lanes = 1 << streaming_log
     rng = random.Random((domain.modulus << 8) ^ (streaming_log << 2) ^ int(inverse))
@@ -180,12 +213,12 @@ def run_case(run_dir: Path, domain: Domain, streaming_log: int, inverse: bool,
     rtl_inputs = natural_inputs if input_order == "natural" else [natural_inputs[bit_reverse(i, log_size)] for i in range(domain.size)]
     rtl_outputs = natural_outputs if output_order == "natural" else [natural_outputs[bit_reverse(i, log_size)] for i in range(domain.size)]
 
-    stem = f"{domain.name}_{'intt' if inverse else 'ntt'}_k{streaming_log}_r{radix_log}_pe{pe_count}_{input_order}_{output_order}_{profile}_{architecture}_{reduction}"
+    stem = f"{domain.name}_{'intt' if inverse else 'ntt'}_k{streaming_log}_r{radix_log}_pe{pe_count}_{transpose}_{input_order}_{output_order}_{profile}_{architecture}_{reduction}"
     rtl = run_dir / f"{stem}.sv"
     args = ["bash", str(ROOT / "ngen.bat"), "-n", str(log_size), "-k", str(streaming_log), "-r", str(radix_log),
             "-q", str(domain.modulus), "-root", str(domain.root), "-input-order", input_order,
             "-output-order", output_order, "-profile", profile, "-architecture", architecture,
-            "-reduction", reduction, "-o", str(rtl)]
+            "-reduction", reduction, "-transpose", transpose, "-o", str(rtl)]
     if pe_count is not None:
         args.extend(["-pe", str(pe_count)])
     if domain.twist is not None:
@@ -246,6 +279,8 @@ def main() -> None:
         run_case(run_dir, domains[1], 2, False, reduction="barrett", radix_log=3, pe_count=1)
         run_case(run_dir, domains[3], 2, False, reduction="shoup", radix_log=2, pe_count=1)
         run_case(run_dir, domains[3], 2, True, reduction="montgomery", radix_log=2, pe_count=2)
+        run_case(run_dir, domains[3], 2, False, reduction="shoup", radix_log=2, pe_count=1, transpose="switch")
+        run_case(run_dir, domains[3], 2, True, reduction="montgomery", radix_log=2, pe_count=1, transpose="switch")
         domain = domains[0]
         rng = random.Random(20260817)
         first = [rng.randrange(domain.modulus) for _ in range(domain.size)]
@@ -258,6 +293,15 @@ def main() -> None:
         simulation = run_dir / "back_to_back"
         subprocess.run(["iverilog", "-g2012", "-s", "test", "-o", str(simulation), str(rtl), str(tb)], check=True)
         subprocess.run(["vvp", str(simulation)], check=True)
+        rv_inputs = [rng.randrange(domain.modulus) for _ in range(domain.size)]
+        rv_rtl = run_dir / "ready_valid.sv"
+        subprocess.run(["bash", str(ROOT / "ngen.bat"), "-n", "3", "-k", "1", "-r", "1", "-pe", "1", "-q", "17", "-root", "9",
+                        "-architecture", "streamed", "-reduction", "shoup", "-protocol", "ready-valid", "-o", str(rv_rtl), "ntt"], cwd=ROOT, check=True, stdout=subprocess.DEVNULL)
+        rv_tb = run_dir / "ready_valid_tb.sv"
+        rv_tb.write_text(ready_valid_testbench(5, 2, rv_inputs, transform(domain, rv_inputs, False)))
+        rv_simulation = run_dir / "ready_valid"
+        subprocess.run(["iverilog", "-g2012", "-s", "test", "-o", str(rv_simulation), str(rv_rtl), str(rv_tb)], check=True)
+        subprocess.run(["vvp", str(rv_simulation)], check=True)
     print("PASS generic streamed NTT matrix")
 
 

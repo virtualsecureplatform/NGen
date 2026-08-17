@@ -12,6 +12,7 @@ final case class DesignMetadata(
     outputFile: String,
     inputOrder: String = "natural",
     outputOrder: String = "natural",
+    protocol: String = "next",
     architectureParameters: Map[String, Int] = Map.empty
 ):
   private def quote(value: String): String =
@@ -32,6 +33,7 @@ final case class DesignMetadata(
        |  "architecture": ${quote(architecture.name)},
        |  "input_order": ${quote(inputOrder)},
        |  "output_order": ${quote(outputOrder)},
+       |  "protocol": ${quote(protocol)},
        |  "streaming_width": ${architecture.contract.streamingWidth},
        |  "radix": $radix,
        |  "profile": ${quote(profile)},

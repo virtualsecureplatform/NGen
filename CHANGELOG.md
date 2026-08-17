@@ -14,6 +14,11 @@
 - Added reusable PE counts, synchronous conflict-free memory banks, indexed
   address/twiddle control ROMs, and two-buffer overlap.
 - Added generated fused radix-4 and radix-8 PEs for complete transforms.
+- Packed each PE's operation addresses and twiddle data into one indexed ROM.
+- Added optional per-chunk ready/valid input stalls and output backpressure.
+- Added RNS polynomial-multiplication/CRT and general-size mixed-radix or
+  Bluestein planning oracles.
+- Integrated physical switch-transpose boundaries into square custom streams.
 
 ## 0.1.0
 
