@@ -12,6 +12,42 @@ import ngen.rtl.{Architecture, GenericNttGraph, PipelineProfile, Port, PortDirec
 import java.nio.file.{Files, Path}
 
 object Main:
+  private def artifactBase(output: Path): String = output.toString.stripSuffix(".sv").stripSuffix(".v")
+
+  private def writePresetArtifacts(
+      config: GeneratorConfig,
+      output: Path,
+      reduction: String,
+      inputCycles: Int,
+      outputCycles: Int,
+      latency: Int,
+      initiationInterval: Int
+  ): Unit =
+    val direction = config.direction.toString.toLowerCase
+    val profile = config.profile.toString.toLowerCase
+    val base = artifactBase(output)
+    val json = s"""{
+      |  "schema": "ngen-design-v1",
+      |  "generator_version": "${Cli.Version}",
+      |  "domain": "${config.domain.name}",
+      |  "modulus": "${config.domain.modulus.q}",
+      |  "transform_size": ${config.domain.size},
+      |  "direction": "$direction",
+      |  "streaming_width": ${config.streamingWidth},
+      |  "radix": ${config.radix},
+      |  "profile": "$profile",
+      |  "reduction": "$reduction",
+      |  "latency": $latency,
+      |  "initiation_interval": $initiationInterval,
+      |  "input_cycles": $inputCycles,
+      |  "output_cycles": $outputCycles,
+      |  "output_file": "${output.toString.replace("\\", "\\\\").replace("\"", "\\\"")}"
+      |}
+      |""".stripMargin
+    Files.writeString(Path.of(base + ".json"), json)
+    if config.graph then Files.writeString(Path.of(base + ".graph.gv"), TransformDot.emit(config.domain, config.direction == Direction.Inverse))
+    if config.rtlGraph then
+      Files.writeString(Path.of(base + ".rtl.gv"), s"digraph rtl { input -> buffer -> ${reduction.toLowerCase} -> output; }\n")
   private def printPlan(config: GeneratorConfig): Unit =
     val direction = config.direction match
       case Direction.Forward => "forward NTT"
@@ -38,6 +74,7 @@ object Main:
         val output = Path.of(config.output.getOrElse("KyberHPM1PE.v"))
         Option(output.getParent).foreach(Files.createDirectories(_))
         Files.writeString(output, KyberSystemVerilog.emit(config.top.getOrElse("KyberHPM1PE")))
+        writePresetArtifacts(config, output, "KyberBarrett", 256, 256, KyberSystemVerilog.InverseCycles + 2, KyberSystemVerilog.InverseCycles)
         println(s"Written design in $output.")
         return true
       require(Set("yata8", "yata64", "yata512")(config.domain.name), "raintt requires a YATA preset")
@@ -52,6 +89,9 @@ object Main:
         case _ => "YataRainttTop"
       val top = config.top.getOrElse(defaultTop)
       Files.writeString(output, YataMicrocodedSystemVerilog.emit(config.domain.logSize, config.streamingLog, config.profile, top))
+      val cycles = config.domain.size / config.streamingWidth
+      val schedule = YataMicrocodedSystemVerilog.scheduleLengths(config.domain.logSize, config.streamingLog, config.profile)
+      writePresetArtifacts(config, output, "YataSredc", cycles, cycles, schedule._1.max(schedule._2) + 2, schedule._1.max(schedule._2))
       println(s"Written design in $output.")
       true
     else if config.domain.name == "hoge32" then
@@ -59,6 +99,7 @@ object Main:
       val output = Path.of(config.output.getOrElse("design.sv"))
       Option(output.getParent).foreach(Files.createDirectories(_))
       Files.writeString(output, HogeSystemVerilog.emitRadix32(config.top.getOrElse("SmallHoge32P64Rtl")))
+      writePresetArtifacts(config, output, "Goldilocks", 1, 1, 1, 1)
       println(s"Written design in $output.")
       true
     else if config.domain.name == "hoge1024" then
@@ -69,6 +110,8 @@ object Main:
       val top = config.top.getOrElse(if inverse then "INTTWrap" else "NTTWrap")
       val rtl = if inverse then HogeSystemVerilog.emitStreamingIntt(top) else HogeSystemVerilog.emitStreamingNtt(top)
       Files.writeString(output, rtl)
+      val bundles = HogeSystemVerilog.streamingBundles(inverse)
+      writePresetArtifacts(config, output, "Goldilocks", 32, 32, bundles + 2, bundles)
       println(s"Written design in $output.")
       true
     else if config.domain.name == "custom" then

@@ -1,77 +1,78 @@
-# NGen
+# NGen 0.1.0
 
-NGen is an experimental generator for exact, streaming Number Theoretic
-Transform hardware. It adopts SGen's separation between algebraic transforms,
-architecture lowering, timed RTL, and backends, while making finite-field and
-NTT conventions explicit.
+NGen generates exact streaming Number Theoretic Transform hardware. Its
+SGen-style command line lowers finite-field transform specifications through a
+latency-aware RTL representation and emits synthesizable SystemVerilog,
+metadata, and optional graphs.
 
-The current `0.1.0-SNAPSHOT` provides:
+## Supported designs
 
-- exact `BigInt` arithmetic modulo an arbitrary prime;
-- validated YATA, HOGE/Goldilocks, and CRYSTALS-Kyber field presets;
-- cyclic, twist-based negacyclic, and seven-layer Kyber reference NTTs;
-- a compositional transform IR with permutations, diagonals, radix-2 stages,
-  and composition; and
-- a synthesizable SystemVerilog backend for the fully-parallel YATA radix-8
-  NTT/INTT benchmark wrapper; and
-- a timed RTL signal graph that inserts explicit delay nodes to align operands
-  according to configurable modular-operator latencies.
+| Preset | Configuration | Generated interface |
+|---|---:|---|
+| `yata8` | N=8, K=8, radix 8 | dual YATA RAINTT |
+| `yata64` | N=64, K=8, radix 8 | dual YATA RAINTT |
+| `yata512` | N=512, K=64, radix 8 | dual YATA RAINTT |
+| `hoge32` | N=32, K=32, radix 32 | dual HOGE butterfly |
+| `hoge1024` | N=1024, K=32, radix 32 | packed `NTTWrap`/`INTTWrap` |
+| `kyber256` | N=256, one PE | Kyber PE1 load/start/read protocol |
 
-Kyber is deliberately represented as an incomplete negacyclic transform. Its
-prime `3329` supports an order-256 root (`17`) but no order-512 root, so the
-Kyber transform stops after seven layers and produces 128 polynomial pairs.
-The field, root schedule, forward transform, and inverse transform are available
-now. The Kyber PE memory/control protocol adapter follows the first generated
-YATA RTL vertical slice.
+Custom cyclic or negacyclic primes support fully-parallel radix-2 generation
+with Barrett reduction (`-k` equal to `-n`, `-r 1`).
 
-## SGen-style command line
+## Build and use
 
-Like SGen, NGen accepts global design options followed by the transform name.
-`-n`, `-k`, and `-r` are log2 values for transform size, streaming width, and
-radix respectively.
+Java 17 or newer is required.
 
 ```bash
-sbt test
-sbt "run -preset yata512 -k 6 -r 3 -check ntt"
-sbt "run -preset hoge1024 -k 5 -r 5 intt"
-sbt "run -preset kyber256 -k 0 -r 1 ntt"
-sbt "run -n 3 -q 17 -root 9 -check ntt"
-sbt "run -preset yata8 -k 3 -r 3 -check -o design.sv raintt"
-sbt "run presets"
+sbt test assembly
+./ngen.bat version
+./ngen.bat presets
+
+./ngen.bat -preset yata512 -k 6 -r 3 -profile baseline \
+  -o YataRainttTop.v raintt
+
+./ngen.bat -preset hoge1024 -k 5 -r 5 -o INTTWrap.v intt
+./ngen.bat -preset hoge1024 -k 5 -r 5 -o NTTWrap.v ntt
+
+./ngen.bat -preset kyber256 -k 0 -r 1 -o KyberHPM1PE.v kyberpe
+
+./ngen.bat -n 3 -k 3 -r 1 -q 17 -root 9 \
+  -graph -rtlgraph -o design.sv ntt
 ```
 
-`ntt` and `intt` currently print the validated generation plan; `-check` also
-runs a mathematical round trip, including Kyber's incomplete transform
-schedule. The combined `raintt` transform emits the dual-interface YATA
-radix-8 design required by `small_yata8_raintt_p27`.
+Options precede the terminal transform. `-n`, `-k`, and `-r` are base-2
+logarithms. Pipeline profiles are `baseline` and `f300`; the latter adds a
+scheduling gap between microcoded bundles or uses the deeper generic graph
+latencies. `f300` is a pipeline intent, not a vendor timing guarantee.
 
-The generated candidate can be evaluated in a sibling `LLM-NTT-Examples`
-checkout:
+Every generation writes `<output-stem>.json`. `-graph` writes the transform
+decomposition and `-rtlgraph` writes the scheduled architecture graph.
+
+## LLM-NTT adapter
+
+The standalone adapter maps characterized task IDs to NGen commands and the
+sibling evaluator:
 
 ```bash
-candidate_dir="$(mktemp -d /tmp/ngen-yata8.XXXXXX)"
-sbt "run -preset yata8 -k 3 -r 3 -check \
-  -o $candidate_dir/SmallYata8RainttP27Rtl.sv raintt"
-
-../LLM-NTT-Examples/scripts/evaluate_candidate.sh \
-  --task small_yata8_raintt_p27 \
-  --verilog-dir "$candidate_dir"
+scripts/ngen_llm_ntt.py \
+  --task small_yata8x8_raintt_p27 \
+  --llm-ntt-root ../LLM-NTT-Examples \
+  --with-yosys
 ```
 
-The LLM-NTT evaluator requires its pinned TFHEpp submodule and ignored Chisel
-reference outputs because its CMake configuration elaborates all test targets.
-From that repository, initialize submodules and run `sbt run` in the YATA and
-HOGE Chisel directories before the first evaluation.
+Supported task IDs cover all rows in the table above. The adapter does not
+couple NGen to the LLM candidate-selection runner.
 
-The generated radix-8 candidate passes all three TFHEpp-based test vectors with
-one input cycle, one wait cycle, and one output cycle in each direction. Its
-SREDC implementation deliberately emits no Verilog modulo operator.
+## Verification
 
-## Next milestone
+- Scala models check modular arithmetic, roots, transform decompositions,
+  Kyber's incomplete schedule, timed alignment, and code generation.
+- `scripts/test_generated_rtl.sh` lint-compiles and simulates a generated custom
+  NTT against a known vector.
+- `LLM-NTT-Examples` provides TFHEpp/cuHEpp/Kyber vector oracles for every
+  characterized preset, including a standalone HOGE forward-NTT oracle.
+- The evaluator's `--with-yosys --yosys-candidate-only` path records flattened
+  structural statistics for self-contained generated designs.
 
-The timed graph already attaches configurable latency metadata to modular
-operators and inserts explicit delay nodes on shorter butterfly paths. The next
-milestone lowers the complete radix-8 plan through that graph, emits the delay
-registers and valid path, and composes those blocks with a transpose buffer for
-the 8-lane by 8-cycle task. No checked-in reference RTL is used by the NGen
-generation path.
+NGen is GPL-3.0 licensed. Generated designs do not copy checked-in reference
+RTL; constants and schedules are derived from the declared transform domains.

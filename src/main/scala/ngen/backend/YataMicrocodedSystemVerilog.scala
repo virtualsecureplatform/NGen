@@ -93,6 +93,12 @@ object YataMicrocodedSystemVerilog:
   private def lit(value: Long): String = if value < 0 then s"-27'sd${-value}" else s"27'sd$value"
   private def lines(values: Seq[String], indent: Int): String = values.map(" " * indent + _).mkString("\n")
 
+  def scheduleLengths(logSize: Int, streamingLog: Int, profile: ProfileName): (Int, Int) =
+    val tables = YataField.tables(logSize)
+    val factor = if profile == ProfileName.F300 then 2 else 1
+    (bundle(inverseProgram(logSize, tables), 1 << streamingLog).size * factor,
+      bundle(forwardProgram(logSize, tables), 1 << streamingLog).size * factor)
+
   def emit(logSize: Int, streamingLog: Int, profile: ProfileName, top: String): String =
     val size = 1 << logSize
     val lanes = 1 << streamingLog

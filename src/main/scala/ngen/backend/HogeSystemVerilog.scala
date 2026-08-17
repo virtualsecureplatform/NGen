@@ -210,6 +210,7 @@ object HogeSystemVerilog:
 
   def emitStreamingIntt(top: String = "INTTWrap"): String = emitStreaming(top, inverse = true)
   def emitStreamingNtt(top: String = "NTTWrap"): String = emitStreaming(top, inverse = false)
+  def streamingBundles(inverse: Boolean): Int = bundle(if inverse then inverseProgram(10,5) else forwardProgram(10,5)).size
 
   private def emitStreaming(top: String, inverse: Boolean): String =
     val size = 1024

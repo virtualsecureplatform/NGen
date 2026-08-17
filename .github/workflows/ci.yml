@@ -1,0 +1,23 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - name: Install RTL tools
+        run: sudo apt-get update && sudo apt-get install -y verilator yosys
+      - name: Unit tests and launcher
+        run: sbt test assembly
+      - name: Generated RTL simulation
+        run: scripts/test_generated_rtl.sh
+      - name: Launcher smoke test
+        run: bash ngen.bat version

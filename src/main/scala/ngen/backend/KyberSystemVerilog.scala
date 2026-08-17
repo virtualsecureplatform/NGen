@@ -4,6 +4,8 @@ import ngen.algebra.Domains
 import ngen.transform.KyberNtt
 
 object KyberSystemVerilog:
+  val ForwardCycles = 896
+  val InverseCycles = 1152
   private val domain = Domains.Kyber256
   private val zetas = KyberNtt.zetas(domain).map(_.toInt)
   private def lines(values: Seq[String], spaces: Int): String = values.map(" " * spaces + _).mkString("\n")
