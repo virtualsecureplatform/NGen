@@ -24,6 +24,8 @@
 - Added one-bundle-per-cycle radix-2 issue with tagged retirement and
   drain-before-next-stage barriers.
 - Added valid-aligned registers between every fused radix-4/8 butterfly layer.
+- Added classical F0-F4 and power-of-two-base generalized Fermat transform
+  domains with shift/add twiddle pipelines.
 
 ## 0.1.0
 

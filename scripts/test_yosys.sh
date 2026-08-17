@@ -27,6 +27,9 @@ synthesize "${run_dir}/generic-radix4.sv" main
 bash ngen.bat -n 4 -k 2 -r 2 -pe 1 -q 12289 -root 4134 -architecture streamed -reduction shoup -transpose switch -o "${run_dir}/generic-switch.sv" ntt
 synthesize "${run_dir}/generic-switch.sv" main
 
+bash ngen.bat -fermat 4 -n 5 -k 3 -r 1 -pe 2 -architecture streamed -o "${run_dir}/fermat.sv" ntt
+synthesize "${run_dir}/fermat.sv" main
+
 bash ngen.bat -preset yata8 -k 3 -r 3 -o "${run_dir}/yata.sv" raintt
 synthesize "${run_dir}/yata.sv" SmallYata8RainttP27Rtl
 

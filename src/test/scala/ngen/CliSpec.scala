@@ -104,3 +104,9 @@ class CliSpec extends AnyFunSuite:
         assert(reduction == ReductionChoice.Shoup)
         assert(output.contains("pipe.sv"))
       case other => fail(s"expected butterfly pipeline command, got $other")
+
+  test("classical and generalized Fermat domains derive their fields"):
+    val classical = Cli.parse(Seq("-fermat", "4", "-n", "5", "-k", "3", "ntt")).asInstanceOf[Command.Generate].config
+    assert(classical.domain.modulus.q == 65537)
+    val generalized = Cli.parse(Seq("-fermat-base", "4", "-fermat-index", "1", "-n", "2", "-k", "1", "ntt")).asInstanceOf[Command.Generate].config
+    assert(generalized.domain.modulus.q == 17)

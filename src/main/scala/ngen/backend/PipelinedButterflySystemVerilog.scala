@@ -9,7 +9,7 @@ object PipelinedButterflySystemVerilog:
   val Latency = 3
 
   def emit(field: Modulus, reduction: ReductionKind, top: String = "NGenPipelinedButterfly"): String =
-    require(Set(ReductionKind.Barrett, ReductionKind.Montgomery, ReductionKind.Shoup)(reduction))
+    require(Set(ReductionKind.Barrett, ReductionKind.Montgomery, ReductionKind.Shoup, ReductionKind.FermatShift)(reduction))
     val width = field.bitWidth
     val radix = BigInt(1) << width
     val qInv = (-field.q.modInverse(radix)).mod(radix)
@@ -18,6 +18,7 @@ object PipelinedButterflySystemVerilog:
       case ReductionKind.Barrett => s"localparam [${2 * width - 1}:0] MU=${2 * width}'d$mu;"
       case ReductionKind.Montgomery => s"localparam [${width - 1}:0] QINV=${width}'d$qInv;"
       case ReductionKind.Shoup => ""
+      case ReductionKind.FermatShift => s"localparam integer FERMAT_PERIOD=${2 * (width - 1)};"
       case _ => ""
     val stageRegisters = reduction match
       case ReductionKind.Shoup =>
@@ -26,12 +27,14 @@ object PipelinedButterflySystemVerilog:
         s"reg [${2 * width - 1}:0] product_0,product_1;reg [${4 * width - 1}:0] scaled_1;"
       case ReductionKind.Montgomery =>
         s"reg [${2 * width - 1}:0] product_0,product_1,correction_product_1;"
+      case ReductionKind.FermatShift => s"reg [${width - 1}:0] product_0,product_1;"
       case _ => ""
     val stageZero = reduction match
       case ReductionKind.Shoup =>
         s"product_0<={{$width{1'b0}},multiply_input}*{{$width{1'b0}},constant_in};approximate_0<={{$width{1'b0}},multiply_input}*{{$width{1'b0}},precon_in};"
       case ReductionKind.Barrett | ReductionKind.Montgomery =>
         s"product_0<={{$width{1'b0}},multiply_input}*{{$width{1'b0}},constant_in};"
+      case ReductionKind.FermatShift => s"product_0<=fermat_mul(multiply_input,constant_in);"
       case _ => ""
     val stageOne = reduction match
       case ReductionKind.Shoup =>
@@ -40,6 +43,7 @@ object PipelinedButterflySystemVerilog:
         s"product_1<=product_0;scaled_1<={{${2 * width}{1'b0}},product_0}*{{${2 * width}{1'b0}},MU};"
       case ReductionKind.Montgomery =>
         s"product_1<=product_0;correction_product_1<={{$width{1'b0}},product_0[${width - 1}:0]}*{{$width{1'b0}},QINV};"
+      case ReductionKind.FermatShift => s"product_1<=product_0;"
       case _ => ""
     val stageTwo = reduction match
       case ReductionKind.Shoup =>
@@ -48,6 +52,7 @@ object PipelinedButterflySystemVerilog:
         s"quotient_product_temp={{$width{1'b0}},scaled_1[${4 * width - 1}:${2 * width}]}*{{${2 * width}{1'b0}},MODULUS};signed_value=$$signed({${width + 1}'d0,product_1})-$$signed({1'b0,quotient_product_temp});if(signed_value<0)signed_value=signed_value+MODULUS_REMAINDER;if(signed_value>=MODULUS_REMAINDER)signed_value=signed_value-MODULUS_REMAINDER;if(signed_value>=MODULUS_REMAINDER)signed_value=signed_value-MODULUS_REMAINDER;reduced=signed_value[${width - 1}:0];"
       case ReductionKind.Montgomery =>
         s"multiple_temp={{$width{1'b0}},correction_product_1[${width - 1}:0]}*{{$width{1'b0}},MODULUS};wide_value={1'b0,product_1}+{1'b0,multiple_temp};montgomery_value=wide_value[${2 * width}:$width];if(montgomery_value>={1'b0,MODULUS})montgomery_value=montgomery_value-{1'b0,MODULUS};reduced=montgomery_value[${width - 1}:0];"
+      case ReductionKind.FermatShift => s"reduced=product_1;"
       case _ => ""
     s"""module $top #(parameter TAG_WIDTH=1)(
        |  input clock,input reset,input valid_in,input [1:0] kind_in,
@@ -60,6 +65,7 @@ object PipelinedButterflySystemVerilog:
        |  reg [${2 * width}:0] wide_value;reg [${2 * width - 1}:0] multiple_temp;reg [${3 * width - 1}:0] quotient_product_temp;reg signed [${3 * width}:0] signed_value;reg [${width}:0] montgomery_value;reg [${width - 1}:0] reduced;
        |  function automatic [${width - 1}:0] mod_add(input [${width - 1}:0] a,input [${width - 1}:0] b);reg [${width}:0] v;begin v={1'b0,a}+{1'b0,b};if(v>=MODULUS_EXT)v=v-MODULUS_EXT;mod_add=v[${width - 1}:0];end endfunction
        |  function automatic [${width - 1}:0] mod_sub(input [${width - 1}:0] a,input [${width - 1}:0] b);reg [${width}:0] v;begin if(a>=b)v={1'b0,a}-{1'b0,b};else v={1'b0,a}+MODULUS_EXT-{1'b0,b};mod_sub=v[${width - 1}:0];end endfunction
+       |  function automatic [${width - 1}:0] fermat_mul(input [${width - 1}:0] a,input [${width - 1}:0] exponent);integer j;reg [${width}:0] v;begin v={1'b0,a};for(j=0;j<${2 * (width - 1)};j=j+1)begin if(j<exponent)begin v=v<<1;if(v>=MODULUS_EXT)v=v-MODULUS_EXT;end end fermat_mul=v[${width - 1}:0];end endfunction
        |  always @(posedge clock)begin
        |    if(reset)begin valid_0<=0;valid_1<=0;valid_out<=0;out0<=0;out1<=0;tag_out<=0;end
        |    else begin

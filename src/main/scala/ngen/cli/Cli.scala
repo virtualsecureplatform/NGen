@@ -3,6 +3,7 @@ package ngen.cli
 import ngen.algebra.{Domains, Modulus, NttDomain, TransformShape}
 import ngen.rtl.{ArchitectureKind, ProfileName, ReductionChoice, StreamProtocol, TransposeKind}
 import ngen.transform.DataOrder
+import ngen.arithmetic.{FermatField, GeneralizedFermatField}
 
 import scala.collection.mutable
 
@@ -59,6 +60,9 @@ object Cli:
       |  -r <r>          log2 of the radix; custom domains default to radix 2.
       |  -pe <count>     Reusable butterfly PE count; defaults to max(1, K/2).
       |  -q <prime>      Field modulus for a custom domain (decimal or 0x hexadecimal).
+      |  -fermat <m>     Classical Fermat field F_m; requires -n and supports m=0..4.
+      |  -fermat-base <a> Generalized Fermat base a; combine with -fermat-index and -n.
+      |  -fermat-index <m> Exponent index for a^(2^m)+1.
       |  -root <value>   Primitive N-th root for a custom domain; value may be auto.
       |  -psi <value>    Optional primitive 2N-th root; use -root auto -psi auto for automatic negacyclic roots.
       |  -base-case <n>  Stop an incomplete negacyclic NTT at blocks of size n.
@@ -112,6 +116,9 @@ object Cli:
     var r: Option[Int] = None
     var peCount: Option[Int] = None
     var q: Option[BigInt] = None
+    var fermatIndex: Option[Int] = None
+    var generalizedFermatBase: Option[BigInt] = None
+    var generalizedFermatIndex: Option[Int] = None
     var root: Option[String] = None
     var psi: Option[String] = None
     var baseCase: Option[Int] = None
@@ -138,6 +145,9 @@ object Cli:
         case "-r" => r = Some(requiredValue(args, "-r").toInt)
         case "-pe" => peCount = Some(requiredValue(args, "-pe").toInt)
         case "-q" => q = Some(integer(requiredValue(args, "-q")))
+        case "-fermat" => fermatIndex = Some(requiredValue(args, "-fermat").toInt)
+        case "-fermat-base" => generalizedFermatBase = Some(integer(requiredValue(args, "-fermat-base")))
+        case "-fermat-index" => generalizedFermatIndex = Some(requiredValue(args, "-fermat-index").toInt)
         case "-root" => root = Some(requiredValue(args, "-root"))
         case "-psi" => psi = Some(requiredValue(args, "-psi"))
         case "-base-case" => baseCase = Some(requiredValue(args, "-base-case").toInt)
@@ -183,6 +193,17 @@ object Cli:
             Domains.named(name).getOrElse(
               throw new IllegalArgumentException(s"unknown preset '$name'; expected ${Domains.all.map(_.name).mkString(", ")}")
             )
+          case None if fermatIndex.isDefined =>
+            require(q.isEmpty && root.isEmpty && psi.isEmpty && baseCase.isEmpty, "-fermat derives modulus and root")
+            val logSize = n.getOrElse(throw new IllegalArgumentException("-fermat requires -n"))
+            FermatField(fermatIndex.get).domain(logSize)
+          case None if generalizedFermatBase.isDefined || generalizedFermatIndex.isDefined =>
+            require(generalizedFermatBase.isDefined && generalizedFermatIndex.isDefined, "generalized Fermat fields require both -fermat-base and -fermat-index")
+            require(q.isEmpty && root.isEmpty && psi.isEmpty && baseCase.isEmpty, "generalized Fermat fields derive modulus and root")
+            val base = generalizedFermatBase.get
+            require(base.isValidInt && Integer.bitCount(base.toInt) == 1, "hardware Fermat shift reduction currently requires a power-of-two base")
+            val logSize = n.getOrElse(throw new IllegalArgumentException("generalized Fermat fields require -n"))
+            GeneralizedFermatField(base, generalizedFermatIndex.get).domain(logSize)
           case None =>
             val logSize = n.getOrElse(throw new IllegalArgumentException("-n is required without -preset"))
             require(logSize > 0 && logSize < 31, s"-n must be between 1 and 30, got $logSize")

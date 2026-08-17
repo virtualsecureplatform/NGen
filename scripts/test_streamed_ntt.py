@@ -249,6 +249,29 @@ def run_case(run_dir: Path, domain: Domain, streaming_log: int, inverse: bool,
     print(f"PASS {stem}")
 
 
+def run_fermat_case(run_dir: Path, fermat_index: int, log_size: int, streaming_log: int, radix_log: int, inverse: bool) -> None:
+    word_bits = 1 << fermat_index
+    modulus = (1 << word_bits) + 1
+    size = 1 << log_size
+    root = pow(2, (2 * word_bits) // size, modulus)
+    domain = Domain(f"fermat{fermat_index}", size, modulus, root)
+    rng = random.Random(fermat_index * 1000 + log_size * 10 + int(inverse))
+    values = [rng.randrange(modulus) for _ in range(size)]
+    expected = transform(domain, values, inverse)
+    lanes = 1 << streaming_log
+    stem = f"fermat{fermat_index}_{'intt' if inverse else 'ntt'}_n{log_size}_k{streaming_log}_r{radix_log}"
+    rtl = run_dir / f"{stem}.sv"
+    subprocess.run(["bash", str(ROOT / "ngen.bat"), "-fermat", str(fermat_index), "-n", str(log_size),
+                    "-k", str(streaming_log), "-r", str(radix_log), "-architecture", "streamed", "-o", str(rtl),
+                    "intt" if inverse else "ntt"], cwd=ROOT, check=True, stdout=subprocess.DEVNULL)
+    tb = run_dir / f"{stem}_tb.sv"
+    tb.write_text(testbench(modulus.bit_length(), lanes, values, expected))
+    simulation = run_dir / stem
+    subprocess.run(["iverilog", "-g2012", "-s", "test", "-o", str(simulation), str(rtl), str(tb)], check=True)
+    subprocess.run(["vvp", str(simulation)], check=True, stdout=subprocess.DEVNULL)
+    print(f"PASS {stem}")
+
+
 def main() -> None:
     domains = [
         Domain("cyclic8_q17", 8, 17, 9),
@@ -281,6 +304,10 @@ def main() -> None:
         run_case(run_dir, domains[3], 2, True, reduction="montgomery", radix_log=2, pe_count=2)
         run_case(run_dir, domains[3], 2, False, reduction="shoup", radix_log=2, pe_count=1, transpose="switch")
         run_case(run_dir, domains[3], 2, True, reduction="montgomery", radix_log=2, pe_count=1, transpose="switch")
+        for inverse in (False, True):
+            run_fermat_case(run_dir, 4, 5, 3, 1, inverse)
+            run_fermat_case(run_dir, 4, 4, 2, 2, inverse)
+            run_fermat_case(run_dir, 4, 3, 2, 3, inverse)
         domain = domains[0]
         rng = random.Random(20260817)
         first = [rng.randrange(domain.modulus) for _ in range(domain.size)]

@@ -24,10 +24,10 @@ object PipelineProfile:
   def named(name: ProfileName): PipelineProfile = if name == ProfileName.Baseline then Baseline else F300
 
 enum ReductionKind:
-  case YataSredc, Goldilocks, KyberMontgomery, Barrett, Montgomery, Shoup
+  case YataSredc, Goldilocks, KyberMontgomery, Barrett, Montgomery, Shoup, FermatShift
 
 enum ReductionChoice:
-  case Auto, Barrett, Montgomery, Shoup
+  case Auto, Barrett, Montgomery, Shoup, FermatShift
 
 object ReductionChoice:
   def parse(value: String): ReductionChoice = value.toLowerCase match
@@ -35,7 +35,8 @@ object ReductionChoice:
     case "barrett" => ReductionChoice.Barrett
     case "montgomery" => ReductionChoice.Montgomery
     case "shoup" => ReductionChoice.Shoup
-    case other => throw new IllegalArgumentException(s"unknown reduction '$other'; expected auto, barrett, montgomery, or shoup")
+    case "fermat" | "fermat-shift" => ReductionChoice.FermatShift
+    case other => throw new IllegalArgumentException(s"unknown reduction '$other'; expected auto, barrett, montgomery, shoup, or fermat-shift")
 
 enum ArchitectureKind:
   case Auto, FullyParallel, Streamed

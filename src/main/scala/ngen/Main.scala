@@ -88,7 +88,8 @@ object Main:
     println("Mathematical NTT/INTT round-trip passed.")
 
   private def emit(config: GeneratorConfig): Boolean =
-    if config.domain.name != "custom" then
+    val genericDomain = config.domain.name == "custom" || config.domain.name.startsWith("fermat") || config.domain.name.startsWith("generalized-fermat")
+    if !genericDomain then
       require(config.architecture == ArchitectureKind.Auto, "preset backends select their architecture automatically")
       require(config.reduction == ReductionChoice.Auto, "preset backends select their field reduction automatically")
       require(config.protocol == StreamProtocol.NextPulse, "preset backends currently use the next-pulse protocol")
@@ -146,7 +147,7 @@ object Main:
       writePresetArtifacts(config, output, "Goldilocks", 32, 32, bundles + 2 + switchOverhead, bundles)
       println(s"Written design in $output.")
       true
-    else if config.domain.name == "custom" then
+    else if genericDomain then
       val profile = PipelineProfile.named(config.profile)
       val inverse = config.direction == Direction.Inverse
       val output = Path.of(config.output.getOrElse("design.sv"))
@@ -155,11 +156,15 @@ object Main:
       val fullyParallelCompatible = config.streamingLog == config.domain.logSize &&
         config.inputOrder == DataOrder.Natural && config.outputOrder == DataOrder.Natural &&
         !config.domain.shape.isInstanceOf[ngen.algebra.TransformShape.IncompleteNegacyclic] &&
-        config.reduction != ReductionChoice.Montgomery && config.reduction != ReductionChoice.Shoup && config.radixLog == 1 && config.peCount.isEmpty && config.protocol == StreamProtocol.NextPulse && config.transpose == ngen.rtl.TransposeKind.Indexed
+        config.reduction != ReductionChoice.Montgomery && config.reduction != ReductionChoice.Shoup && config.reduction != ReductionChoice.FermatShift && config.radixLog == 1 && config.peCount.isEmpty && config.protocol == StreamProtocol.NextPulse && config.transpose == ngen.rtl.TransposeKind.Indexed
       val reductionKind = config.reduction match
+        case ReductionChoice.Auto if config.domain.name.startsWith("fermat") || config.domain.name.startsWith("generalized-fermat") => ReductionKind.FermatShift
         case ReductionChoice.Auto | ReductionChoice.Barrett => ReductionKind.Barrett
         case ReductionChoice.Montgomery => ReductionKind.Montgomery
         case ReductionChoice.Shoup => ReductionKind.Shoup
+        case ReductionChoice.FermatShift =>
+          require(config.domain.name.startsWith("fermat") || config.domain.name.startsWith("generalized-fermat"), "fermat-shift reduction requires a Fermat field")
+          ReductionKind.FermatShift
       val useFullyParallel = config.architecture match
         case ArchitectureKind.Auto => fullyParallelCompatible
         case ArchitectureKind.FullyParallel =>
@@ -255,6 +260,7 @@ object Main:
             case ReductionChoice.Barrett => ReductionKind.Barrett
             case ReductionChoice.Montgomery => ReductionKind.Montgomery
             case ReductionChoice.Shoup => ReductionKind.Shoup
+            case ReductionChoice.FermatShift => ReductionKind.FermatShift
             case _ => throw new IllegalArgumentException("butterfly pipeline reduction must be explicit")
           Files.writeString(output, PipelinedButterflySystemVerilog.emit(modulus, kind, topName.getOrElse("NGenPipelinedButterfly")))
           println(s"Written pipelined butterfly in $output.")

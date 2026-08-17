@@ -39,7 +39,7 @@ object PeStreamingNttSystemVerilog:
       protocol: StreamProtocol = StreamProtocol.NextPulse
   ): String =
     require(top.matches("[A-Za-z_][A-Za-z0-9_$]*"), s"invalid SystemVerilog module name: $top")
-    require(Set(ReductionKind.Barrett, ReductionKind.Montgomery, ReductionKind.Shoup)(reduction))
+    require(Set(ReductionKind.Barrett, ReductionKind.Montgomery, ReductionKind.Shoup, ReductionKind.FermatShift)(reduction))
     val plan = schedule.plan
     val domain = plan.domain
     val field = domain.modulus
@@ -55,10 +55,15 @@ object PeStreamingNttSystemVerilog:
     val shoup = ShoupField(field)
     val wordRadix = BigInt(1) << width
     val montgomeryQInv = (-field.q.modInverse(wordRadix)).mod(wordRadix)
+    val fermatWordBits = width - 1
+    val fermatPeriod = 2 * fermatWordBits
+    val fermatPowers = if reduction == ReductionKind.FermatShift then Vector.tabulate(fermatPeriod)(power => field.pow(2,power) -> BigInt(power)).toMap else Map.empty[BigInt,BigInt]
 
     def encoded(value: BigInt): BigInt =
       val normalized = field.normalize(value)
-      if reduction == ReductionKind.Montgomery then field.multiply(normalized, wordRadix) else normalized
+      if reduction == ReductionKind.Montgomery then field.multiply(normalized, wordRadix)
+      else if reduction == ReductionKind.FermatShift then if normalized == 0 then 0 else fermatPowers.getOrElse(normalized, throw new IllegalArgumentException(s"FNT constant $normalized is not a power of two"))
+      else normalized
     def literal(value: BigInt): String = s"${width}'d${encoded(value)}"
     def precondition(value: BigInt): String = s"${width}'d${shoup.prepare(value).precondition}"
     def mulCall(value: String, constant: String, precon: String): String =
@@ -68,6 +73,7 @@ object PeStreamingNttSystemVerilog:
       case ReductionKind.Barrett => s"localparam [${2 * width - 1}:0] BARRETT_MU=${2 * width}'d${barrett.mu};"
       case ReductionKind.Montgomery => s"localparam [${width - 1}:0] MONTGOMERY_QINV=${width}'d$montgomeryQInv;"
       case ReductionKind.Shoup => "// Shoup reciprocal travels with each PE constant."
+      case ReductionKind.FermatShift => s"localparam integer FERMAT_WORD_BITS=$fermatWordBits,FERMAT_PERIOD=$fermatPeriod;"
       case _ => throw new IllegalArgumentException("unsupported reduction")
     val multiplyFunction = reduction match
       case ReductionKind.Barrett =>
@@ -84,6 +90,11 @@ object PeStreamingNttSystemVerilog:
         s"""function automatic [${width - 1}:0] field_mul(input [${width - 1}:0] a,input [${width - 1}:0] b,input [${width - 1}:0] b_shoup);
            |  reg [${2 * width - 1}:0] product,approximate_product,quotient_product;reg [${width - 1}:0] approximate_quotient;reg [${2 * width}:0] remainder;
            |  begin product={{$width{1'b0}},a}*{{$width{1'b0}},b};approximate_product={{$width{1'b0}},a}*{{$width{1'b0}},b_shoup};approximate_quotient=approximate_product[${2 * width - 1}:$width];quotient_product={{$width{1'b0}},approximate_quotient}*{{$width{1'b0}},MODULUS};remainder={1'b0,product}-{1'b0,quotient_product};if(remainder>={{${width + 1}{1'b0}},MODULUS})remainder=remainder-{{${width + 1}{1'b0}},MODULUS};field_mul=remainder[${width - 1}:0];end
+           |endfunction""".stripMargin
+      case ReductionKind.FermatShift =>
+        s"""function automatic [${width - 1}:0] field_mul(input [${width - 1}:0] a,input [${width - 1}:0] exponent);
+           |  integer j;reg [${width}:0] value;
+           |  begin value={1'b0,a};for(j=0;j<FERMAT_PERIOD;j=j+1)begin if(j<exponent)begin value=value<<1;if(value>=MODULUS_EXT)value=value-MODULUS_EXT;end end field_mul=value[${width - 1}:0];end
            |endfunction""".stripMargin
       case _ => throw new IllegalArgumentException("unsupported reduction")
 

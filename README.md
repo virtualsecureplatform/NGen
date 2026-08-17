@@ -53,6 +53,9 @@ sbt test assembly
 
 ./ngen.bat -n 8 -k 3 -r 2 -pe 2 -q 12289 -root auto \
   -architecture streamed -reduction shoup -o radix4.sv ntt
+
+./ngen.bat -fermat 4 -n 5 -k 3 -r 1 \
+  -architecture streamed -o fnt65537.sv ntt
 ```
 
 Options precede the terminal transform. `-n`, `-k`, and `-r` are base-2
@@ -161,6 +164,11 @@ and general-size planning that classifies composite sizes for mixed-radix
 lowering and prime sizes for Bluestein lowering. These general-size plans are
 executable mathematical oracles; their RTL lowering is not yet exposed by the
 CLI.
+
+Classical Fermat Number Transforms use `-fermat 0` through `-fermat 4`.
+NGen derives the modulus, transform root, and shift-only twiddle exponents.
+Power-of-two-base generalized Fermat primes use `-fermat-base <a>
+-fermat-index <m>` and the same banked radix-2/4/8 pipelines.
 - `LLM-NTT-Examples` provides TFHEpp/cuHEpp/Kyber vector oracles for every
   characterized preset, including a standalone HOGE forward-NTT oracle.
 - The evaluator's `--with-yosys --yosys-candidate-only` path records flattened
