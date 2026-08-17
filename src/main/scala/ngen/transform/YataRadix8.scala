@@ -96,23 +96,10 @@ object YataRadix8:
       values(right) = YataField.signedReduce(original - values(right))
 
   def inverse(input: Seq[Long]): Vector[Long] =
-    require(input.size == Size)
-    val twist = YataField.tables(3).inttTwist
-    val values = input.zip(twist).map(YataField.multiplySigned).toArray
-    inverseRadix8(values, 0)
-    values.toVector.map(YataField.signedWord)
+    YataTransform.inverse(input, 3)
 
   def forwardResidues(input: Seq[Long]): Vector[Long] =
-    require(input.size == Size)
-    val values = input.map(YataField.signedWord).toArray
-    forwardRadix8(values, 0)
-    val twist = YataField.tables(3).nttTwist
-    values.toVector.zip(twist).map(YataField.multiplySigned)
+    YataTransform.forwardResidues(input, 3)
 
   def forwardTorus(input: Seq[Long]): Vector[Long] =
-    val scale = (BigInt(1) << (32 + YataField.WordBits - 1)) / YataField.Modulus
-    val rounding = BigInt(1) << (YataField.WordBits - 2)
-    forwardResidues(input).map { residue =>
-      val positive = if residue < 0 then residue + YataField.Modulus else residue
-      (((BigInt(positive) * scale + rounding) >> (YataField.WordBits - 1)) & 0xffffffffL).toLong
-    }
+    YataTransform.forwardTorus(input, 3)

@@ -2,25 +2,30 @@ package ngen.rtl
 
 import scala.collection.mutable.ArrayBuffer
 
-enum ValueFormat(val width: Int, val signed: Boolean):
-  case SignedWord27 extends ValueFormat(27, true)
-  case SignedWide54 extends ValueFormat(54, true)
-  case Torus32 extends ValueFormat(32, false)
-  case Valid extends ValueFormat(1, false)
+final case class ValueFormat(width: Int, signed: Boolean, label: String):
+  require(width > 0, s"value width must be positive, got $width")
+
+object ValueFormat:
+  val SignedWord27 = ValueFormat(27, signed = true, "s27")
+  val SignedWide54 = ValueFormat(54, signed = true, "s54")
+  val Torus32 = ValueFormat(32, signed = false, "u32")
+  val Valid = ValueFormat(1, signed = false, "valid")
+  def unsigned(width: Int): ValueFormat = ValueFormat(width, signed = false, s"u$width")
+  def signed(width: Int): ValueFormat = ValueFormat(width, signed = true, s"s$width")
 
 trait Operator:
   def name: String
   def arity: Int
   def latency: Int
   def outputFormat(inputs: Vector[Signal]): ValueFormat
-  def evaluate(inputs: Vector[Long]): Long
+  def evaluate(inputs: Vector[BigInt]): BigInt
 
 final case class InputOperator(port: String, format: ValueFormat) extends Operator:
   override val name: String = s"input:$port"
   override val arity: Int = 0
   override val latency: Int = 0
   override def outputFormat(inputs: Vector[Signal]): ValueFormat = format
-  override def evaluate(inputs: Vector[Long]): Long =
+  override def evaluate(inputs: Vector[BigInt]): BigInt =
     throw new UnsupportedOperationException("input values are supplied by TimedGraph.evaluate")
 
 final case class Delay(cycles: Int, format: ValueFormat) extends Operator:
@@ -29,7 +34,7 @@ final case class Delay(cycles: Int, format: ValueFormat) extends Operator:
   override val arity: Int = 1
   override val latency: Int = cycles
   override def outputFormat(inputs: Vector[Signal]): ValueFormat = format
-  override def evaluate(inputs: Vector[Long]): Long = inputs.head
+  override def evaluate(inputs: Vector[BigInt]): BigInt = inputs.head
 
 final case class Signal(id: Int, format: ValueFormat, availableAt: Int)
 
@@ -42,8 +47,8 @@ final case class TimedGraph(nodes: Vector[Node], outputs: Vector[Signal]):
 
   val latency: Int = outputs.map(_.availableAt).maxOption.getOrElse(0)
 
-  def evaluate(inputValues: Map[String, Long]): Vector[Long] =
-    val values = Array.ofDim[Long](nodes.size)
+  def evaluate(inputValues: Map[String, BigInt]): Vector[BigInt] =
+    val values = Array.fill[BigInt](nodes.size)(BigInt(0))
     nodes.foreach { node =>
       values(node.signal.id) = node.operator match
         case InputOperator(port, _) => inputValues.getOrElse(port, throw new IllegalArgumentException(s"missing input $port"))

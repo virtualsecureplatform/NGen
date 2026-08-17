@@ -2,6 +2,7 @@ package ngen
 
 import ngen.algebra.TransformShape
 import ngen.cli.{Cli, Command, Direction}
+import ngen.rtl.ProfileName
 import org.scalatest.funsuite.AnyFunSuite
 
 class CliSpec extends AnyFunSuite:
@@ -44,3 +45,11 @@ class CliSpec extends AnyFunSuite:
     assert(config.direction == Direction.Both)
     assert(config.output.contains("out.sv"))
     assert(config.top.contains("Candidate"))
+
+  test("pipeline profile and graph flags are parsed before the transform"):
+    val command = Cli.parse(Seq("-n", "3", "-q", "17", "-root", "9", "-r", "1", "-profile", "f300", "-graph", "-rtlgraph", "ntt"))
+    val config = command match
+      case Command.Generate(value) => value
+      case other => fail(s"expected generation command, got $other")
+    assert(config.profile == ProfileName.F300)
+    assert(config.graph && config.rtlGraph)

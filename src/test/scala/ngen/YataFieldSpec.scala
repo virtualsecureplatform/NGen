@@ -1,7 +1,7 @@
 package ngen
 
 import ngen.arithmetic.YataField
-import ngen.transform.YataRadix8
+import ngen.transform.{YataRadix8, YataTransform}
 import org.scalatest.funsuite.AnyFunSuite
 
 class YataFieldSpec extends AnyFunSuite:
@@ -48,3 +48,11 @@ class YataFieldSpec extends AnyFunSuite:
         1197829964L
       )
     )
+
+  test("64-point radix-8 decomposition matches established vectors"):
+    val inverse = YataTransform.inverse(Vector.tabulate(64)(_.toLong), 6)
+    assert(inverse.take(8) == Vector(4690033, 16666317, 20169256, 5559777, -19655123, -13217390, 6835221, 7785761))
+    assert(inverse.takeRight(8) == Vector(-9479890, 507366, 15562977, -19441252, -5222767, 13095277, -2682463, 2925600))
+    val output = YataTransform.forwardTorus(inverse, 6)
+    assert(output.take(8) == Vector(2930621684L, 723847199L, 743179795L, 216583892L, 3619447914L, 1739252626L, 3144495322L, 2038058611L))
+    assert(output.takeRight(8) == Vector(2169315891L, 4135502902L, 449939127L, 2373726654L, 3932006811L, 207227658L, 98621926L, 2123992767L))

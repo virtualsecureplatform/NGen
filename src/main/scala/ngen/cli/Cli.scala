@@ -1,6 +1,7 @@
 package ngen.cli
 
 import ngen.algebra.{Domains, Modulus, NttDomain, TransformShape}
+import ngen.rtl.ProfileName
 
 import scala.collection.mutable
 
@@ -14,7 +15,10 @@ final case class GeneratorConfig(
     direction: Direction,
     check: Boolean,
     output: Option[String],
-    top: Option[String]
+    top: Option[String],
+    profile: ProfileName,
+    graph: Boolean,
+    rtlGraph: Boolean
 ):
   val streamingWidth: Int = 1 << streamingLog
   val radix: Int = 1 << radixLog
@@ -47,6 +51,9 @@ object Cli:
       |  -psi <value>    Optional primitive 2N-th root for a negacyclic transform.
       |  -o <file>       Output file; defaults to design.sv for RTL transforms.
       |  -top <name>     Override the generated top-level module name.
+      |  -profile <name> Pipeline profile: baseline (default) or f300.
+      |  -graph          Emit the transform-decomposition DOT graph.
+      |  -rtlgraph       Emit the scheduled RTL DOT graph.
       |  -check          Run the mathematical round-trip check before generation.
       |  -nologo         Accepted for SGen command-line compatibility.
       |
@@ -86,6 +93,9 @@ object Cli:
     var check = false
     var output: Option[String] = None
     var top: Option[String] = None
+    var profile = ProfileName.Baseline
+    var graph = false
+    var rtlGraph = false
     var terminal: Option[String] = None
 
     while args.nonEmpty do
@@ -99,6 +109,9 @@ object Cli:
         case "-psi" => psi = Some(integer(requiredValue(args, "-psi")))
         case "-o" => output = Some(requiredValue(args, "-o"))
         case "-top" => top = Some(requiredValue(args, "-top"))
+        case "-profile" => profile = ProfileName.parse(requiredValue(args, "-profile"))
+        case "-graph" => graph = true
+        case "-rtlgraph" => rtlGraph = true
         case "-check" => check = true
         case "-nologo" => ()
         case "-h" | "--help" | "help" => terminal = Some("help")
@@ -146,7 +159,10 @@ object Cli:
             else Direction.Both,
             check,
             output,
-            top
+            top,
+            profile,
+            graph,
+            rtlGraph
           )
         )
       case _ => throw new IllegalArgumentException("a transform name is required")

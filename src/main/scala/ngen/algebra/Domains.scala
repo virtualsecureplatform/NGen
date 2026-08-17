@@ -21,6 +21,16 @@ object Domains:
     description = "YATA compressed RAINTT field, q = 5^4 * 2^16 + 1"
   )
 
+  val Yata64: NttDomain = NttDomain(
+    name = "yata64",
+    size = 64,
+    modulus = Modulus(BigInt("40960001")),
+    root = BigInt("24827955"),
+    shape = TransformShape.Negacyclic,
+    twist = Some(BigInt("17922659")),
+    description = "YATA 8-lane by 8-cycle compressed RAINTT field"
+  )
+
   val Hoge1024: NttDomain = NttDomain(
     name = "hoge1024",
     size = 1024,
@@ -40,7 +50,7 @@ object Domains:
     description = "CRYSTALS-Kyber field; seven-layer incomplete negacyclic NTT"
   )
 
-  val all: Vector[NttDomain] = Vector(Yata8, Yata512, Hoge1024, Kyber256)
+  val all: Vector[NttDomain] = Vector(Yata8, Yata64, Yata512, Hoge1024, Kyber256)
 
   def named(name: String): Option[NttDomain] = all.find(_.name == name.toLowerCase)
 
