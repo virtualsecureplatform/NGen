@@ -2,6 +2,7 @@ package ngen
 
 import ngen.algebra.TransformShape
 import ngen.cli.{Cli, Command, Direction}
+import ngen.transform.GeneralNttAlgorithm
 import ngen.rtl.{ProfileName, ReductionChoice, StreamProtocol, TransposeKind}
 import org.scalatest.funsuite.AnyFunSuite
 
@@ -116,6 +117,14 @@ class CliSpec extends AnyFunSuite:
     command match
       case Command.RnsPolynomial(basis,_,_,_) => assert(basis.combinedModulus==1649)
       case other => fail(s"expected RNS polynomial command, got $other")
+
+  test("generalntt can request four-step decomposition"):
+    val command = Cli.parse(Seq("-size", "8", "-q", "17", "-root", "9", "-four-step", "-four-step-factor", "2", "generalntt"))
+    command match
+      case Command.GeneralNtt(plan, _, _) =>
+        assert(plan.algorithm == GeneralNttAlgorithm.FourStep)
+        assert(plan.fourStepFactorsOrDefault == (2, 4))
+      case other => fail(s"expected generalntt command, got $other")
 
   test("custom core accepts writable runtime control records"):
     val config=Cli.parse(Seq("-n","3","-k","1","-q","17","-root","9","-runtime-control","ntt")).asInstanceOf[Command.Generate].config

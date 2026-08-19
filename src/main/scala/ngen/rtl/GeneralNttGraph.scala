@@ -10,6 +10,12 @@ object GeneralNttGraph:
     def multiply(signal: Signal,constant: BigInt): Signal = if field.normalize(constant)==1 then signal else builder(BarrettMultiplyConstant(field,constant,multiplyLatency),signal)
     def add(values: Vector[Signal]): Signal = values.reduce((left,right)=>builder(ModularAdd(field,profile.addLatency),left,right))
     def direct(values: Vector[Signal],root: BigInt): Vector[Signal] = Vector.tabulate(values.size)(output=>add(values.zipWithIndex.map((signal,index)=>multiply(signal,field.pow(root,index*output)))))
+    def dft(values: Vector[Signal],root: BigInt): Vector[Signal] = direct(values,root)
+    def transpose(values: Vector[Vector[Signal]]): Vector[Vector[Signal]] =
+      require(values.nonEmpty, "four-step transpose requires non-empty stage")
+      val rows = values.size
+      val columns = values.head.size
+      Vector.tabulate(columns)(column => Vector.tabulate(rows)(row => values(row)(column)))
     def radix2(values: Vector[Signal],root: BigInt): Vector[Signal] =
       var current=Vector.tabulate(values.size)(i=>values(ngen.transform.ReferenceNtt.bitReverse(i,Integer.numberOfTrailingZeros(values.size))))
       var span=2
@@ -20,6 +26,12 @@ object GeneralNttGraph:
           next(block+index)=builder(ModularAdd(field,profile.addLatency),even,odd);next(block+index+half)=builder(ModularSubtract(field,profile.addLatency),even,odd)
         current=next.toVector;span*=2
       current
+    def fourStep(values: Vector[Signal], root: BigInt, first: Int, second: Int): Vector[Signal] =
+      val stageOne = Vector.tabulate(second)(secondIndex => dft(Vector.tabulate(first)(firstIndex => values(firstIndex * second + secondIndex)), field.pow(root, second)))
+      val stageTwo = Vector.tabulate(second)(secondIndex => Vector.tabulate(first)(firstIndex => multiply(stageOne(secondIndex)(firstIndex), field.pow(root, secondIndex * firstIndex))))
+      val transposed = transpose(stageTwo)
+      val stageThree = transposed.map(row => dft(row, field.pow(root, first)))
+      Vector.tabulate(first * second)(index => stageThree(index % first)(index / first))
     def recurse(values: Vector[Signal],root: BigInt,factors: Vector[Int]): Vector[Signal] =
       if values.size==1 then values
       else
@@ -31,18 +43,23 @@ object GeneralNttGraph:
         }
         Vector.tabulate(values.size)(index=>second(index%radix)(index/radix))
     val root=if plan.inverse then field.inverse(domain.normalizedRoot) else domain.normalizedRoot
-    var outputs = if plan.algorithm == ngen.transform.GeneralNttAlgorithm.MixedRadix then recurse(inputs,root,domain.factors) else
-      val convolutionRoot=domain.convolutionRoot.getOrElse(throw new IllegalArgumentException("Bluestein RTL requires a convolution root"))
-      val m=domain.convolutionSize;val inverseTwo=BigInt(2).modInverse(domain.size)
-      val zero=multiply(inputs.head,0)
-      val a=Vector.tabulate(m)(index=>if index<domain.size then multiply(inputs(index),field.pow(root,(BigInt(index)*index*inverseTwo).mod(domain.size))) else zero)
-      val kernel=Vector.tabulate(m) { index =>
-        val distance=if index<domain.size then index else if index>m-domain.size then m-index else 0
-        if index<domain.size || index>m-domain.size then field.pow(root,(-BigInt(distance)*distance*inverseTwo).mod(domain.size)) else BigInt(0)
-      }
-      val kernelSpectrum=Vector.tabulate(m)(k=>kernel.indices.foldLeft(BigInt(0))((sum,n)=>field.add(sum,field.multiply(kernel(n),field.pow(convolutionRoot,n*k)))))
-      val spectrum=radix2(a,convolutionRoot).zip(kernelSpectrum).map(multiply)
-      val convolution=radix2(spectrum,field.inverse(convolutionRoot)).map(multiply(_,field.inverse(m)))
-      Vector.tabulate(domain.size)(index=>multiply(convolution(index),field.pow(root,(BigInt(index)*index*inverseTwo).mod(domain.size))))
+    var outputs =
+      if plan.algorithm == ngen.transform.GeneralNttAlgorithm.MixedRadix then recurse(inputs,root,domain.factors)
+      else if plan.algorithm == ngen.transform.GeneralNttAlgorithm.FourStep then
+        val (first, second) = plan.fourStepFactorsOrDefault
+        fourStep(inputs, root, first, second)
+      else
+        val convolutionRoot=domain.convolutionRoot.getOrElse(throw new IllegalArgumentException("Bluestein RTL requires a convolution root"))
+        val m=domain.convolutionSize;val inverseTwo=BigInt(2).modInverse(domain.size)
+        val zero=multiply(inputs.head,0)
+        val a=Vector.tabulate(m)(index=>if index<domain.size then multiply(inputs(index),field.pow(root,(BigInt(index)*index*inverseTwo).mod(domain.size))) else zero)
+        val kernel=Vector.tabulate(m) { index =>
+          val distance=if index<domain.size then index else if index>m-domain.size then m-index else 0
+          if index<domain.size || index>m-domain.size then field.pow(root,(-BigInt(distance)*distance*inverseTwo).mod(domain.size)) else BigInt(0)
+        }
+        val kernelSpectrum=Vector.tabulate(m)(k=>kernel.indices.foldLeft(BigInt(0))((sum,n)=>field.add(sum,field.multiply(kernel(n),field.pow(convolutionRoot,n*k)))))
+        val spectrum=radix2(a,convolutionRoot).zip(kernelSpectrum).map(multiply)
+        val convolution=radix2(spectrum,field.inverse(convolutionRoot)).map(multiply(_,field.inverse(m)))
+        Vector.tabulate(domain.size)(index=>multiply(convolution(index),field.pow(root,(BigInt(index)*index*inverseTwo).mod(domain.size))))
     if plan.inverse then outputs=outputs.map(multiply(_,field.inverse(domain.size)))
     builder.result(outputs*)

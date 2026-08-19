@@ -176,12 +176,14 @@ couple NGen to the LLM candidate-selection runner.
 The transform library also contains reference-checked composition groundwork
 for complete-transform RNS polynomial multiplication with CRT reconstruction,
 and general-size planning that classifies composite sizes for mixed-radix
-lowering and prime sizes for Bluestein lowering. These general-size plans are
-executable mathematical oracles; their RTL lowering is not yet exposed by the
-CLI.
+lowering and prime sizes for Bluestein lowering.
 
 Non-power-of-two transforms use `generalntt`. Composite sizes lower through
-recursive mixed-radix Cooley–Tukey stages. Prime sizes lower through Bluestein;
+recursive mixed-radix Cooley–Tukey stages, with optional `-four-step` support:
+
+- `-four-step-factor` can force the first factor (n1) in the `N = n1 × n2` split.
+
+Prime sizes lower through Bluestein;
 the caller supplies a power-of-two convolution root whose order equals the
 next power of two covering `2*size-1`:
 

@@ -16,3 +16,11 @@ class GeneralNttPlanSpec extends AnyFunSuite:
   test("prime transform sizes select Bluestein planning"):
     val domain = GeneralNttDomain("five", 5, Modulus(11), 3)
     assert(GeneralNttPlan(domain, inverse = false).algorithm == GeneralNttAlgorithm.Bluestein)
+
+  test("four-step plans accept explicit factors"):
+    val domain = GeneralNttDomain("eight", 8, Modulus(17), 9)
+    val plan = GeneralNttPlan(domain, inverse = false, GeneralNttAlgorithm.FourStep, Some((2, 4)))
+    val input = Vector.tabulate(8)(i => BigInt(i))
+    assert(plan.algorithm == GeneralNttAlgorithm.FourStep)
+    assert(plan.resolvedFourStepFactors.contains((2, 4)))
+    assert(plan.evaluate(input) == GeneralNttPlan(domain, inverse = false).evaluate(input))

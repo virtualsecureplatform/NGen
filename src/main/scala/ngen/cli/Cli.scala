@@ -2,7 +2,7 @@ package ngen.cli
 
 import ngen.algebra.{Domains, Modulus, NttDomain, TransformShape}
 import ngen.rtl.{ArchitectureKind, ProfileName, ReductionChoice, StreamProtocol, TransposeKind}
-import ngen.transform.{DataOrder, GeneralNttDomain, GeneralNttPlan, RnsBasis}
+import ngen.transform.{DataOrder, GeneralNttAlgorithm, GeneralNttDomain, GeneralNttPlan, RnsBasis}
 import ngen.arithmetic.{FermatField, GeneralizedFermatField}
 
 import scala.collection.mutable
@@ -61,6 +61,8 @@ object Cli:
       |  -n <n>          log2 of the transform size (required without a preset).
       |  -size <n>       Exact non-power-of-two size for generalntt.
       |  -convolution-root <r> Power-of-two root used by Bluestein convolution.
+      |  -four-step      Enable four-step decomposition for generalntt.
+      |  -four-step-factor <n1> First factor for four-step decomposition.
       |  -k <k>          log2 of the streaming width; defaults to n.
       |  -r <r>          log2 of the radix; custom domains default to radix 2.
       |  -pe <count>     Reusable butterfly PE count; defaults to max(1, K/2).
@@ -100,7 +102,7 @@ object Cli:
       |  switchtranspose Generate a HOGE-style recursive switch transpose.
       |  butterflypipeline Generate a tagged three-stage modular butterfly pipeline.
       |  rnspolymul      Generate two NTTs, pointwise multiply, and INTT per RNS prime.
-      |  generalntt      Generate a staged mixed-radix or Bluestein transform.
+      |  generalntt      Generate a staged mixed-radix, four-step, or Bluestein transform.
       |  presets         List built-in field/domain presets.
       |  version         Print the NGen version.
       |
@@ -154,6 +156,8 @@ object Cli:
     var protocol = StreamProtocol.NextPulse
     var runtimeField = false
     var runtimeControl = false
+    var useFourStep = false
+    var fourStepFactor: Option[Int] = None
     var graph = false
     var rtlGraph = false
     var terminal: Option[String] = None
@@ -185,6 +189,8 @@ object Cli:
         case "-architecture" => architecture = ArchitectureKind.parse(requiredValue(args, "-architecture"))
         case "-reduction" => reduction = ReductionChoice.parse(requiredValue(args, "-reduction"))
         case "-transpose" => transpose = TransposeKind.parse(requiredValue(args, "-transpose"))
+        case "-four-step" => useFourStep = true
+        case "-four-step-factor" => fourStepFactor = Some(requiredValue(args, "-four-step-factor").toInt)
         case "-input-order" => inputOrder = DataOrder.parse(requiredValue(args, "-input-order"))
         case "-output-order" => outputOrder = DataOrder.parse(requiredValue(args, "-output-order"))
         case "-protocol" => protocol = StreamProtocol.parse(requiredValue(args, "-protocol"))
@@ -227,8 +233,23 @@ object Cli:
         val size=exactSize.getOrElse(throw new IllegalArgumentException("generalntt requires -size"))
         val modulus=Modulus(q.getOrElse(throw new IllegalArgumentException("generalntt requires -q")))
         val nthRoot=root.map(integer).getOrElse(throw new IllegalArgumentException("generalntt requires -root"))
-        Command.GeneralNtt(GeneralNttPlan(GeneralNttDomain("general",size,modulus,nthRoot,convolutionRoot),inverse=false),output,top)
+        require(fourStepFactor.forall(_ > 1), "four-step factor must be greater than one")
+        val domain = GeneralNttDomain("general",size,modulus,nthRoot,convolutionRoot)
+        val plan =
+          if useFourStep then
+            GeneralNttPlan(
+              domain,
+              inverse = false,
+              algorithm = GeneralNttAlgorithm.FourStep,
+              fourStepFactors = fourStepFactor.map { first =>
+                require(first > 1 && first < size && size % first == 0, s"four-step factor must divide size and be in [2, ${size - 1}]")
+                (first, size / first)
+              }
+            )
+          else GeneralNttPlan(domain, inverse = false)
+        Command.GeneralNtt(plan, output, top)
       case Some(transform @ ("ntt" | "intt" | "raintt" | "kyberpe")) =>
+        require(!useFourStep && fourStepFactor.isEmpty, "-four-step options are only valid for generalntt")
         val selected = preset match
           case Some(name) =>
             require(n.isEmpty && q.isEmpty && root.isEmpty && psi.isEmpty && baseCase.isEmpty && peCount.isEmpty, "a preset cannot be combined with custom-domain options")
