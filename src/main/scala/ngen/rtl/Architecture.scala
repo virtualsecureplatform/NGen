@@ -39,14 +39,15 @@ object ReductionChoice:
     case other => throw new IllegalArgumentException(s"unknown reduction '$other'; expected auto, barrett, montgomery, shoup, or fermat-shift")
 
 enum ArchitectureKind:
-  case Auto, FullyParallel, Streamed
+  case Auto, FullyParallel, Streamed, StageParallel
 
 object ArchitectureKind:
   def parse(value: String): ArchitectureKind = value.toLowerCase.replace("-", "") match
     case "auto" => ArchitectureKind.Auto
     case "fullyparallel" | "parallel" => ArchitectureKind.FullyParallel
     case "streamed" | "streaming" => ArchitectureKind.Streamed
-    case other => throw new IllegalArgumentException(s"unknown architecture '$other'; expected auto, fully-parallel, or streamed")
+    case "stageparallel" | "pipeline" | "pipelined" => ArchitectureKind.StageParallel
+    case other => throw new IllegalArgumentException(s"unknown architecture '$other'; expected auto, fully-parallel, streamed, or stage-parallel")
 
 enum PresetBackend:
   case Auto, Microcoded, StageParallel

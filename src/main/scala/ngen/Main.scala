@@ -11,6 +11,7 @@ import ngen.backend.HogePipelinedSystemVerilog
 import ngen.backend.KyberSystemVerilog
 import ngen.backend.SwitchTransposeSystemVerilog
 import ngen.backend.PeStreamingNttSystemVerilog
+import ngen.backend.StageParallelNttSystemVerilog
 import ngen.backend.GenericSwitchTransposeWrapper
 import ngen.backend.PipelinedButterflySystemVerilog
 import ngen.backend.RnsPolynomialMultiplierSystemVerilog
@@ -125,7 +126,7 @@ object Main:
       val usePipelined = config.transpose == ngen.rtl.TransposeKind.Indexed && (config.presetBackend match
         case PresetBackend.StageParallel => true
         case PresetBackend.Microcoded => false
-        case PresetBackend.Auto => config.domain.size <= 64)
+        case PresetBackend.Auto => config.domain.name.startsWith("yata"))
       val rtl =
         if usePipelined then YataPipelinedSystemVerilog.emit(config.domain.logSize, config.streamingLog, config.profile, top, config.transpose)
         else YataMicrocodedSystemVerilog.emit(config.domain.logSize, config.streamingLog, config.profile, top, config.transpose)
@@ -202,9 +203,50 @@ object Main:
           require(fullyParallelCompatible, "fully-parallel custom RTL requires K=N, radix 2, natural stream order, a complete transform, and no -pe override")
           true
         case ArchitectureKind.Streamed => false
+        case ArchitectureKind.StageParallel => false
+      val useStageParallel = config.architecture == ArchitectureKind.StageParallel
       var architectureParameters = Map.empty[String, Int]
       val architecture =
-        if useFullyParallel then
+        if useStageParallel then
+          require(config.domain.shape == ngen.algebra.TransformShape.Cyclic || config.domain.shape == ngen.algebra.TransformShape.Negacyclic,
+            "stage-parallel architecture requires a complete cyclic or negacyclic transform")
+          require(config.protocol == StreamProtocol.NextPulse, "stage-parallel architecture currently requires the next-pulse protocol")
+          require(config.radixLog == 1 && config.peCount.isEmpty && !config.runtimeControl,
+            "stage-parallel architecture currently uses the complete radix-2 plan without PE overrides")
+          require(config.reduction != ReductionChoice.FermatShift && reductionKind != ReductionKind.FermatShift,
+            "stage-parallel architecture currently supports Barrett, Montgomery, or Shoup reduction")
+          val basePlan = NttPlan.radix2(config.domain, inverse, config.inputOrder, config.outputOrder)
+          val useSwitchTranspose = config.transpose == ngen.rtl.TransposeKind.Switch
+          if useSwitchTranspose then
+            require(config.streamingWidth * config.streamingWidth == config.domain.size,
+              "switch transpose requires streaming width equal to stream cycle count")
+          val coreTop = if useSwitchTranspose then s"${top}Core" else top
+          val coreRtl = StageParallelNttSystemVerilog.emit(basePlan, config.streamingWidth, coreTop, config.profile, reductionKind)
+          Files.writeString(output,
+            if useSwitchTranspose then GenericSwitchTransposeWrapper.emit(coreRtl, top, coreTop, config.streamingWidth, config.domain.modulus.bitWidth)
+            else coreRtl)
+          val stageCount = StageParallelNttSystemVerilog.stageCount(basePlan)
+          val streamCycles = config.domain.size / config.streamingWidth
+          val gap = if config.profile == ProfileName.F300 then 1 else 0
+          val executionCycles = stageCount + math.max(0, stageCount - 1) * gap
+          architectureParameters = Map(
+            "stage_count" -> stageCount,
+            "stage_gap" -> gap,
+            "switch_transpose" -> (if useSwitchTranspose then 1 else 0),
+            "coefficient_buffers" -> 0
+          )
+          Architecture(
+            s"custom-${if inverse then "intt" else "ntt"}-stage-parallel",
+            Vector(Port("clock", PortDirection.Input, ValueFormat.Valid), Port("reset", PortDirection.Input, ValueFormat.Valid),
+              Port("next", PortDirection.Input, ValueFormat.Valid), Port("ready", PortDirection.Output, ValueFormat.Valid), Port("next_out", PortDirection.Output, ValueFormat.Valid)),
+            Vector.empty, Vector.empty,
+            Vector(ngen.rtl.CounterSpec("capture", streamCycles), ngen.rtl.CounterSpec("stage", math.max(1, stageCount)), ngen.rtl.CounterSpec("output", streamCycles)),
+            StreamingContract(config.domain.size, config.streamingWidth, streamCycles, streamCycles,
+              streamCycles + executionCycles + streamCycles - 1 + (if useSwitchTranspose then 2 * (config.streamingWidth - 1) else 0),
+              streamCycles + executionCycles + streamCycles - 1),
+            reductionKind, profile
+          )
+        else if useFullyParallel then
           val graph = GenericNttGraph.build(config.domain, inverse, profile)
           Files.writeString(output, GraphSystemVerilog.emit(graph, config.domain, top))
           Architecture(

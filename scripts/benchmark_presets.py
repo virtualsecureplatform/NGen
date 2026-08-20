@@ -34,8 +34,15 @@ def load(path: Path) -> dict[str, Any]:
 def task_metrics(task: str, metrics: dict[str, Any]) -> dict[str, Any]:
     if "_raintt_" in task and not task.endswith(("_intt", "_ntt")):
         directions = {}
+        direction_prefixes = [task]
+        if task.startswith("yata_raintt_"):
+            direction_prefixes.append("yata_raintt")
         for direction in ("intt", "ntt"):
-            values = task_metrics(f"{task}_{direction}", metrics)
+            values = {}
+            for prefix in direction_prefixes:
+                values = task_metrics(f"{prefix}_{direction}", metrics)
+                if values:
+                    break
             if values:
                 directions[direction] = values
         if directions:

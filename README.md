@@ -54,6 +54,9 @@ sbt test assembly
 ./ngen.bat -n 8 -k 3 -r 2 -pe 2 -q 12289 -root auto \
   -architecture streamed -reduction shoup -o radix4.sv ntt
 
+./ngen.bat -n 4 -k 4 -r 1 -q 12289 -root 4134 \
+  -architecture stage-parallel -reduction montgomery -o staged.sv ntt
+
 ./ngen.bat -fermat 4 -n 5 -k 3 -r 1 \
   -architecture streamed -o fnt65537.sv ntt
 ```
@@ -78,6 +81,15 @@ buffers. One buffer can capture while the other executes, and output can drain
 one buffer while the next transform executes. The default PE count is
 `max(1, K/2)`. Multipliers therefore scale with PE count rather than with the
 number of scheduled butterflies.
+
+`-architecture stage-parallel` is also available for arbitrary complete cyclic
+or negacyclic domains. It emits one registered boundary per radix-2 NTT stage
+and groups all butterflies in that stage behind the boundary. Barrett,
+Montgomery, and Shoup reductions are supported, as are natural or bit-reversed
+stream orders. This is a fully unrolled stage datapath, so it is a useful
+throughput/timing baseline and a substrate for later banked or PE-limited
+implementations; incomplete Kyber-style plans and Fermat-shift reduction remain
+on the streamed backend.
 
 Radix-2 PEs use a three-stage tagged arithmetic pipeline for Barrett,
 Montgomery, or Shoup multiplication. The same pipeline can be emitted as a
@@ -139,11 +151,11 @@ The standalone primitive/network can be emitted with:
 ```
 
 Built-in YATA/HOGE presets select a conservative backend in `auto` mode:
-small YATA designs use the stage-parallel lowering, while the large 512/1024
-point presets retain the compact microcoded reference until target-specific
-memory and arithmetic modules are selected.  The experimental lowering can be
-requested explicitly with `-preset-backend stage-parallel`; use
-`-preset-backend microcoded` to reproduce the original schedule.
+YATA uses the stage-parallel lowering, while the large HOGE 1024-point preset
+retains the compact microcoded reference until target-specific memory and
+arithmetic modules are selected.  The experimental lowering can be requested
+explicitly with `-preset-backend stage-parallel`; use `-preset-backend
+microcoded` to reproduce the original schedule.
 
 Every generation writes `<output-stem>.json`. `-graph` writes the transform
 decomposition and `-rtlgraph` writes the scheduled architecture graph.

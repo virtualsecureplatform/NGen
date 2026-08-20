@@ -21,6 +21,9 @@ synthesize "${run_dir}/generic-streamed.sv" main
 bash ngen.bat -n 4 -k 2 -r 1 -q 12289 -root 4134 -architecture streamed -reduction shoup -o "${run_dir}/generic-shoup.sv" ntt
 synthesize "${run_dir}/generic-shoup.sv" main
 
+bash ngen.bat -n 4 -k 4 -r 1 -q 12289 -root 4134 -architecture stage-parallel -reduction montgomery -o "${run_dir}/generic-stage.sv" ntt
+synthesize "${run_dir}/generic-stage.sv" main
+
 bash ngen.bat -n 4 -k 2 -r 2 -pe 1 -q 12289 -root 4134 -architecture streamed -reduction shoup -o "${run_dir}/generic-radix4.sv" ntt
 synthesize "${run_dir}/generic-radix4.sv" main
 

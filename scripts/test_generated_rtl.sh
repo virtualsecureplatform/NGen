@@ -14,6 +14,14 @@ verilator --cc --exe --build --top-module main \
   "${repo_root}/tests/rtl/generic_ntt_q17_tb.cpp"
 "${run_dir}/obj/Vmain"
 
+sbt --error "run -n 3 -k 3 -r 1 -q 17 -root 9 -architecture stage-parallel -o ${run_dir}/stage.sv ntt"
+verilator --lint-only --Wall -Wno-fatal --top-module main "${run_dir}/stage.sv"
+verilator --cc --exe --build --top-module main \
+  --Mdir "${run_dir}/obj-stage" \
+  "${run_dir}/stage.sv" \
+  "${repo_root}/tests/rtl/generic_ntt_q17_tb.cpp"
+"${run_dir}/obj-stage/Vmain"
+
 sbt --error "run -n 4 -k 4 -r 1 -q 12289 -root 4134 -profile baseline -o ${run_dir}/design16.sv ntt"
 verilator --lint-only --Wall --top-module main "${run_dir}/design16.sv"
 verilator --cc --exe --build --top-module main \

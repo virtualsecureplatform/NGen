@@ -62,6 +62,12 @@ class CliSpec extends AnyFunSuite:
       case Command.Generate(config) => assert(config.presetBackend == ngen.rtl.PresetBackend.StageParallel)
       case other => fail(s"expected generation command, got $other")
 
+  test("generic architecture accepts stage-parallel lowering"):
+    val command = Cli.parse(Seq("-n", "3", "-k", "2", "-q", "17", "-root", "9", "-architecture", "stage-parallel", "ntt"))
+    command match
+      case Command.Generate(config) => assert(config.architecture == ngen.rtl.ArchitectureKind.StageParallel)
+      case other => fail(s"expected generation command, got $other")
+
   test("switch transpose has an SGen-style terminal command"):
     val command = Cli.parse(Seq("-n", "3", "-data-width", "16", "-o", "transpose.sv", "switchtranspose"))
     assert(command == Command.SwitchTranspose(3, 16, Some("transpose.sv"), None))

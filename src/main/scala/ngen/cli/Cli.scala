@@ -82,7 +82,7 @@ object Cli:
       |  -top <name>     Override the generated top-level module name.
       |  -data-width <w> Element width for switchtranspose; defaults to 64.
       |  -profile <name> Pipeline profile: baseline (default) or f300.
-      |  -architecture <a> RTL architecture: auto (default), fully-parallel, or streamed.
+      |  -architecture <a> RTL architecture: auto (default), fully-parallel, streamed, or stage-parallel.
       |  -preset-backend <b> Preset lowering: auto, microcoded, or stage-parallel.
       |  -reduction <r>  Modular reduction: auto (default), barrett, montgomery, or shoup.
       |  -transpose <t>  Streaming transpose: indexed (default) or switch.
