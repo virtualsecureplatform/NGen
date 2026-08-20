@@ -135,14 +135,22 @@ not applicable.
 
 Specialized arithmetic RTL can be emitted directly. Proth reducers use their
 power-of-two radix and a bounded correction network; pseudo-Mersenne, Solinas,
-and Goldilocks reducers use unrolled signed folding. The fused form explicitly
-tiles multiplication into 27x18 DSP partial products before reduction and the
-radix-2 butterfly:
+and Goldilocks reducers use unrolled signed folding. The fused form uses
+ordinary inferred multiplication by default. Experimental explicit 27x18
+DSP tiling is enabled only with `-dsp-decompose`:
 
 ```bash
 ./ngen.bat -q 40960001 -o proth-reducer.sv primereducer
 ./ngen.bat -q 40960001 -o fused-butterfly.sv fusedbutterfly
+./ngen.bat -q 40960001 -dsp-decompose -o fused-dsp.sv fusedbutterfly
 ```
+
+For custom streamed and stage-parallel NTTs, `-reduction auto` now consumes the
+prime analysis: sparse Solinas, pseudo-Mersenne, and Goldilocks forms use signed
+folding, while Proth forms use the Montgomery/SREDC-compatible representation.
+Generic primes retain the established fallback. The recursive HOGE pipeline
+shares each twiddle product between both butterfly outputs, and native YATA
+stages fuse twiddle multiplication, SREDC, and radix-8 butterfly operations.
 
 Recursive arithmetic planning tracks redundant ranges and inserts correction
 points only when the configured storage width would overflow. Generated design

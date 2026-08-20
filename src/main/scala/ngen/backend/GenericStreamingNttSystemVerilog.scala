@@ -35,8 +35,8 @@ object GenericStreamingNttSystemVerilog:
       reduction: ReductionKind = ReductionKind.Barrett
   ): String =
     require(top.matches("[A-Za-z_][A-Za-z0-9_$]*"), s"invalid SystemVerilog module name: $top")
-    require(Set(ReductionKind.Barrett, ReductionKind.Montgomery, ReductionKind.Shoup)(reduction),
-      "generic streamed RTL supports Barrett, Montgomery, or Shoup reduction")
+    require(Set(ReductionKind.Barrett, ReductionKind.Montgomery, ReductionKind.Shoup,ReductionKind.SparseFold)(reduction),
+      "generic streamed RTL supports Barrett, Montgomery, Shoup, or sparse folding")
     val domain = plan.domain
     val field = domain.modulus
     val barrett = BarrettField(field)
@@ -63,6 +63,7 @@ object GenericStreamingNttSystemVerilog:
       case ReductionKind.Barrett => s"  localparam [${2 * width - 1}:0] BARRETT_MU = ${2 * width}'d${barrett.mu};"
       case ReductionKind.Montgomery => s"  localparam [${width - 1}:0] MONTGOMERY_QINV = ${width}'d$montgomeryQInv;"
       case ReductionKind.Shoup => "  // Shoup reciprocals are precomputed beside each constant operand."
+      case ReductionKind.SparseFold => "  // Sparse signed folding is specialized from the modulus form."
       case _ => throw new IllegalArgumentException("unsupported generic reduction")
     val multiplyFunction = reduction match
       case ReductionKind.Barrett =>
@@ -121,6 +122,7 @@ object GenericStreamingNttSystemVerilog:
            |      field_mul = remainder[${width - 1}:0];
            |    end
            |  endfunction""".stripMargin
+      case ReductionKind.SparseFold => "  "+SparseFoldFunction.emit(field).replace("\n","\n  ")
       case _ => throw new IllegalArgumentException("unsupported generic reduction")
 
     val inputPorts = Vector.tabulate(streamingWidth)(lane => s"input [${width - 1}:0] i$lane")

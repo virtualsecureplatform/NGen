@@ -28,6 +28,7 @@ final case class GeneratorConfig(
     outputOrder: DataOrder,
     protocol: StreamProtocol,
     interfaceKind: InterfaceKind,
+    dspDecompose: Boolean,
     runtimeControl: Boolean,
     graph: Boolean,
     rtlGraph: Boolean
@@ -48,7 +49,7 @@ enum Command:
   case GeneralNtt(plan: GeneralNttPlan, output: Option[String], top: Option[String])
   case PrimeInfo(modulus: Modulus)
   case PrimeGenerate(transformLog: Int, bitWidth: Int)
-  case PrimeReducer(modulus: Modulus, fusedButterfly: Boolean, output: Option[String], top: Option[String])
+  case PrimeReducer(modulus: Modulus, fusedButterfly: Boolean, dspDecompose:Boolean, output: Option[String], top: Option[String])
   case Presets
   case Version
   case Help
@@ -94,6 +95,7 @@ object Cli:
       |  -output-order <o> Output stream order: natural (default) or bitreversed.
       |  -protocol <p>   Stream control: next (default) or ready-valid.
       |  -interface <i>  External interface: raw (default) or axi4stream.
+      |  -dsp-decompose  Opt in to experimental explicit 27x18 DSP tiling.
       |  -runtime-field  Expose runtime modulus/reduction-constant ports on butterflypipeline.
       |  -runtime-control Expose writable packed PE operation/twiddle records.
       |  -graph          Emit the transform-decomposition DOT graph.
@@ -113,7 +115,7 @@ object Cli:
       |  primeinfo       Classify -q and report hardware reduction properties.
       |  primegen        Find a negacyclic NTT prime using -n and -data-width.
       |  primereducer    Emit a specialized Proth or sparse-prime reducer.
-      |  fusedbutterfly  Emit a DSP-tiled specialized twiddle butterfly.
+      |  fusedbutterfly  Emit a specialized fused twiddle butterfly.
       |  presets         List built-in field/domain presets.
       |  version         Print the NGen version.
       |
@@ -167,6 +169,7 @@ object Cli:
     var outputOrder = DataOrder.Natural
     var protocol = StreamProtocol.NextPulse
     var interfaceKind = InterfaceKind.Raw
+    var dspDecompose = false
     var runtimeField = false
     var runtimeControl = false
     var useFourStep = false
@@ -209,6 +212,7 @@ object Cli:
         case "-output-order" => outputOrder = DataOrder.parse(requiredValue(args, "-output-order"))
         case "-protocol" => protocol = StreamProtocol.parse(requiredValue(args, "-protocol"))
         case "-interface" => interfaceKind = InterfaceKind.parse(requiredValue(args,"-interface"))
+        case "-dsp-decompose" => dspDecompose = true
         case "-runtime-field" => runtimeField = true
         case "-runtime-control" => runtimeControl = true
         case "-graph" => graph = true
@@ -233,7 +237,7 @@ object Cli:
         Command.PrimeGenerate(n.getOrElse(throw new IllegalArgumentException("primegen requires -n")),dataWidth)
       case Some(value @ ("primereducer"|"fusedbutterfly")) =>
         require(preset.isEmpty&&n.isEmpty&&root.isEmpty&&psi.isEmpty,s"$value uses -q, -o, and -top")
-        Command.PrimeReducer(Modulus(q.getOrElse(throw new IllegalArgumentException(s"$value requires -q"))),value=="fusedbutterfly",output,top)
+        Command.PrimeReducer(Modulus(q.getOrElse(throw new IllegalArgumentException(s"$value requires -q"))),value=="fusedbutterfly",dspDecompose,output,top)
       case Some("switchtranspose") =>
         require(preset.isEmpty && q.isEmpty && root.isEmpty && psi.isEmpty && baseCase.isEmpty && peCount.isEmpty, "switchtranspose uses -n and -data-width, not transform architecture options")
         val logSize = n.getOrElse(throw new IllegalArgumentException("switchtranspose requires -n"))
@@ -273,6 +277,7 @@ object Cli:
           else GeneralNttPlan(domain, inverse = false)
         Command.GeneralNtt(plan, output, top)
       case Some(transform @ ("ntt" | "intt" | "raintt" | "kyberpe")) =>
+        require(!dspDecompose,"-dsp-decompose is currently limited to fusedbutterfly so complete NTTs retain synthesis-inferred multiplication")
         require(!useFourStep && fourStepFactor.isEmpty, "-four-step options are only valid for generalntt")
         val selected = preset match
           case Some(name) =>
@@ -344,6 +349,7 @@ object Cli:
             outputOrder,
             if interfaceKind==InterfaceKind.Axi4Stream then StreamProtocol.ReadyValid else protocol,
             interfaceKind,
+            dspDecompose,
             runtimeControl,
             graph,
             rtlGraph

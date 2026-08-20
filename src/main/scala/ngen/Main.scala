@@ -236,17 +236,26 @@ object Main:
       val output = Path.of(config.output.getOrElse("design.sv"))
       Option(output.getParent).foreach(Files.createDirectories(_))
       val top = config.top.getOrElse("main")
+      val analyzedPrimeForm=PrimeAnalyzer.analyze(config.domain.modulus).form
+      val autoNeedsSpecialized=config.reduction==ReductionChoice.Auto&&(analyzedPrimeForm match
+        case ngen.arithmetic.PrimeForm.Goldilocks|_:ngen.arithmetic.PrimeForm.Proth|_:ngen.arithmetic.PrimeForm.PseudoMersenne|_:ngen.arithmetic.PrimeForm.SparseSolinas=>true
+        case _=>false)
       val fullyParallelCompatible = config.streamingLog == config.domain.logSize &&
         config.inputOrder == DataOrder.Natural && config.outputOrder == DataOrder.Natural &&
         !config.domain.shape.isInstanceOf[ngen.algebra.TransformShape.IncompleteNegacyclic] &&
-        config.reduction != ReductionChoice.Montgomery && config.reduction != ReductionChoice.Shoup && config.reduction != ReductionChoice.FermatShift && config.radixLog == 1 && config.peCount.isEmpty && config.protocol == StreamProtocol.NextPulse && config.transpose == ngen.rtl.TransposeKind.Indexed && !config.runtimeControl
+        config.reduction != ReductionChoice.Montgomery && config.reduction != ReductionChoice.Shoup && config.reduction != ReductionChoice.FermatShift && !autoNeedsSpecialized && config.radixLog == 1 && config.peCount.isEmpty && config.protocol == StreamProtocol.NextPulse && config.transpose == ngen.rtl.TransposeKind.Indexed && !config.runtimeControl
       val reductionKind = config.reduction match
         case ReductionChoice.Auto if config.domain.name.startsWith("fermat") => ReductionKind.FermatShift
         case ReductionChoice.Auto if config.domain.name.startsWith("generalized-fermat") =>
           PrimeAnalyzer.analyze(config.domain.modulus).form match
             case ngen.arithmetic.PrimeForm.GeneralizedFermat(base,_) if base.isValidInt && Integer.bitCount(base.toInt)==1 => ReductionKind.FermatShift
             case _ => ReductionKind.Shoup
-        case ReductionChoice.Auto | ReductionChoice.Barrett => ReductionKind.Barrett
+        case ReductionChoice.Auto =>
+          PrimeAnalyzer.analyze(config.domain.modulus).form match
+            case ngen.arithmetic.PrimeForm.Goldilocks|_:ngen.arithmetic.PrimeForm.PseudoMersenne|_:ngen.arithmetic.PrimeForm.SparseSolinas=>ReductionKind.SparseFold
+            case _:ngen.arithmetic.PrimeForm.Proth=>ReductionKind.Montgomery
+            case _=>ReductionKind.Barrett
+        case ReductionChoice.Barrett => ReductionKind.Barrett
         case ReductionChoice.Montgomery => ReductionKind.Montgomery
         case ReductionChoice.Shoup => ReductionKind.Shoup
         case ReductionChoice.FermatShift =>
@@ -276,12 +285,13 @@ object Main:
         case ngen.arithmetic.PrimeForm.Generic=>0
       var architectureParameters = Map(
         "axi4stream"->(if config.interfaceKind==InterfaceKind.Axi4Stream then 1 else 0),
+        "dsp_decompose"->(if config.dspDecompose then 1 else 0),
         "prime_form"->primeFormCode,
         "two_adicity"->primeAnalysis.twoAdicity,
         "lazy_butterfly_levels"->primeAnalysis.lazyButterflyLevels,
         "montgomery_signed_digits"->primeAnalysis.montgomery.map(_.signedDigits).min
-        ,"dsp_multiplier_tiles"->arithmeticPlan.multiplier.dspCount
-        ,"dsp_partial_adder_levels"->arithmeticPlan.multiplier.adderLevels
+        ,"dsp_multiplier_tiles"->(if config.dspDecompose then arithmeticPlan.multiplier.dspCount else 0)
+        ,"dsp_partial_adder_levels"->(if config.dspDecompose then arithmeticPlan.multiplier.adderLevels else 0)
         ,"lazy_correction_points"->arithmeticPlan.lazySchedule.correctionAfter.size
       )
       val architecture =
@@ -292,7 +302,7 @@ object Main:
           require(config.radixLog == 1 && config.peCount.isEmpty && !config.runtimeControl,
             "stage-parallel architecture currently uses the complete radix-2 plan without PE overrides")
           require(config.reduction != ReductionChoice.FermatShift && reductionKind != ReductionKind.FermatShift,
-            "stage-parallel architecture currently supports Barrett, Montgomery, or Shoup reduction")
+            "stage-parallel architecture currently supports Barrett, Montgomery, Shoup, or sparse-fold reduction")
           val basePlan = NttPlan.radix2(config.domain, inverse, config.inputOrder, config.outputOrder)
           val useSwitchTranspose = config.transpose == ngen.rtl.TransposeKind.Switch
           if useSwitchTranspose then
@@ -419,11 +429,11 @@ object Main:
           println(s"root=${domain.root}")
           println(s"psi=${domain.twist.get}")
           println(s"reduction=${PrimeAnalyzer.analyze(domain.modulus).recommendedMultiplier}")
-        case Command.PrimeReducer(modulus,fused,outputName,topName) =>
+        case Command.PrimeReducer(modulus,fused,dspDecompose,outputName,topName) =>
           val output=Path.of(outputName.getOrElse(if fused then "fused-butterfly.sv" else "prime-reducer.sv"))
           Option(output.getParent).foreach(Files.createDirectories(_))
           val top=topName.getOrElse(if fused then "NGenFusedTwiddleButterfly" else "NGenPrimeReducer")
-          Files.writeString(output,if fused then FusedTwiddleButterflySystemVerilog.emit(modulus,top) else PrimeReductionSystemVerilog.emit(modulus,top))
+          Files.writeString(output,if fused then FusedTwiddleButterflySystemVerilog.emit(modulus,top,dspDecompose) else PrimeReductionSystemVerilog.emit(modulus,top))
           println(s"Written specialized arithmetic in $output.")
         case Command.SwitchTranspose(logSize, dataWidth, outputName, topName) =>
           val output = Path.of(outputName.getOrElse("switch-transpose.sv"))

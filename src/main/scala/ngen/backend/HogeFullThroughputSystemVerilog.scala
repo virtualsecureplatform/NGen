@@ -36,14 +36,15 @@ object HogeFullThroughputSystemVerilog:
             if depth == 1 then BigInt(1)
             else BigInt(2).modPow(3 * (64 - (index << (6 - depth))), HogeField.Modulus)
           Vector(
-            s"level_${depth}_next[$left]=hoge_add($source[$left],hoge_mul($source[$right],${hex(factor)}));",
-            s"level_${depth}_next[$right]=hoge_sub($source[$left],hoge_mul($source[$right],${hex(factor)}));"
+            s"twiddled_$depth[$right]=hoge_mul($source[$right],${hex(factor)});",
+            s"level_${depth}_next[$left]=hoge_add($source[$left],twiddled_$depth[$right]);",
+            s"level_${depth}_next[$right]=hoge_sub($source[$left],twiddled_$depth[$right]);"
           )
         }
       }.mkString(" ")
       s"always @(*) begin $operations end"
     }.mkString("\n  ")
-    val declarations = (1 to 5).map(d => s"reg [63:0] level_$d [0:31]; reg [63:0] level_${d}_next [0:31];").mkString("\n  ")
+    val declarations = (1 to 5).map(d => s"reg [63:0] level_$d [0:31]; reg [63:0] level_${d}_next [0:31]; reg [63:0] twiddled_$d [0:31];").mkString("\n  ")
     val reset = (1 to 5).map(d => s"for(i=0;i<32;i=i+1) level_$d[i]<='0;").mkString(" ")
     val clock = (1 to 5).map(d => s"for(i=0;i<32;i=i+1) level_$d[i]<=level_${d}_next[i];").mkString(" ")
     s"""module HogeForwardRadix32Pipeline(input clock,input reset,input valid_in,input [4:0] cycle_in,input [2047:0] packed_in,output valid_out,output [4:0] cycle_out,output [2047:0] packed_out);
@@ -76,8 +77,9 @@ object HogeFullThroughputSystemVerilog:
             val upper = BigInt(2).modPow(3 * index, HogeField.Modulus)
             val lower = BigInt(2).modPow(9 * index, HogeField.Modulus)
             Vector(
-              s"level_${destination}_next[$left]=hoge_mul(hoge_add($source[$left],hoge_mul($source[$right],${hex(pre)})),${hex(upper)});",
-              s"level_${destination}_next[$right]=hoge_mul(hoge_sub($source[$left],hoge_mul($source[$right],${hex(pre)})),${hex(lower)});"
+              s"twiddled_$destination[$right]=hoge_mul($source[$right],${hex(pre)});",
+              s"level_${destination}_next[$left]=hoge_mul(hoge_add($source[$left],twiddled_$destination[$right]),${hex(upper)});",
+              s"level_${destination}_next[$right]=hoge_mul(hoge_sub($source[$left],twiddled_$destination[$right]),${hex(lower)});"
             )
           else
             val factor = BigInt(2).modPow(3 * (index << (6 - depth)), HogeField.Modulus)
@@ -89,7 +91,7 @@ object HogeFullThroughputSystemVerilog:
       }.mkString(" ")
       s"always @(*) begin $operations end"
     }.mkString("\n  ")
-    val declarations = (1 to 5).map(d => s"reg [63:0] level_$d [0:31]; reg [63:0] level_${d}_next [0:31];").mkString("\n  ")
+    val declarations = (1 to 5).map(d => s"reg [63:0] level_$d [0:31]; reg [63:0] level_${d}_next [0:31]; reg [63:0] twiddled_$d [0:31];").mkString("\n  ")
     val reset = (1 to 5).map(d => s"for(i=0;i<32;i=i+1) level_$d[i]<='0;").mkString(" ")
     val clock = (1 to 5).map(d => s"for(i=0;i<32;i=i+1) level_$d[i]<=level_${d}_next[i];").mkString(" ")
     val moduleName = if former then "HogeFormerInverseRadix32Pipeline" else "HogeInverseRadix32Pipeline"

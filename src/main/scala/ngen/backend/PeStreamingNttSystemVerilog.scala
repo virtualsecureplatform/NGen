@@ -47,7 +47,7 @@ object PeStreamingNttSystemVerilog:
       runtimeControl: Boolean = false
   ): String =
     require(top.matches("[A-Za-z_][A-Za-z0-9_$]*"), s"invalid SystemVerilog module name: $top")
-    require(Set(ReductionKind.Barrett, ReductionKind.Montgomery, ReductionKind.Shoup, ReductionKind.FermatShift)(reduction))
+    require(Set(ReductionKind.Barrett, ReductionKind.Montgomery, ReductionKind.Shoup, ReductionKind.FermatShift,ReductionKind.SparseFold)(reduction))
     val plan = schedule.plan
     val domain = plan.domain
     val field = domain.modulus
@@ -83,6 +83,7 @@ object PeStreamingNttSystemVerilog:
       case ReductionKind.Montgomery => s"localparam [${width - 1}:0] MONTGOMERY_QINV=${width}'d$montgomeryQInv;"
       case ReductionKind.Shoup => "// Shoup reciprocal travels with each PE constant."
       case ReductionKind.FermatShift => s"localparam integer FERMAT_WORD_BITS=$fermatWordBits,FERMAT_PERIOD=$fermatPeriod;"
+      case ReductionKind.SparseFold => "// Sparse signed folding is specialized from the modulus form."
       case _ => throw new IllegalArgumentException("unsupported reduction")
     val multiplyFunction = reduction match
       case ReductionKind.Barrett =>
@@ -105,6 +106,7 @@ object PeStreamingNttSystemVerilog:
            |  integer j;reg [${width}:0] value;
            |  begin value={1'b0,a};for(j=0;j<FERMAT_PERIOD;j=j+1)begin if(j<exponent)begin value=value<<1;if(value>=MODULUS_EXT)value=value-MODULUS_EXT;end end field_mul=value[${width - 1}:0];end
            |endfunction""".stripMargin
+      case ReductionKind.SparseFold => SparseFoldFunction.emit(field)
       case _ => throw new IllegalArgumentException("unsupported reduction")
 
     val protocolPorts = protocol match

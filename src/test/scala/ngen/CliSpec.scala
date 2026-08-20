@@ -20,6 +20,10 @@ class CliSpec extends AnyFunSuite:
         assert(config.interfaceKind==InterfaceKind.Axi4Stream)
         assert(config.protocol==StreamProtocol.ReadyValid)
       case other=>fail(s"expected AXI generation, got $other")
+    Cli.parse(Seq("-n","3","-q","17","-root","9","ntt")) match
+      case Command.Generate(config)=>assert(!config.dspDecompose)
+      case other=>fail(s"expected raw generation, got $other")
+    assertThrows[IllegalArgumentException](Cli.parse(Seq("-n","3","-q","17","-root","9","-dsp-decompose","ntt")))
   test("SGen-style preset options precede the transform"):
     val command = Cli.parse(Seq("-preset", "yata512", "-k", "6", "-r", "3", "-check", "ntt"))
     val config = command match

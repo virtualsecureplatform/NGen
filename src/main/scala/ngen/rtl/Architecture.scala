@@ -24,7 +24,7 @@ object PipelineProfile:
   def named(name: ProfileName): PipelineProfile = if name == ProfileName.Baseline then Baseline else F300
 
 enum ReductionKind:
-  case YataSredc, Goldilocks, KyberMontgomery, Barrett, Montgomery, Shoup, FermatShift
+  case YataSredc, Goldilocks, KyberMontgomery, Barrett, Montgomery, Shoup, FermatShift, SparseFold
 
 enum ReductionChoice:
   case Auto, Barrett, Montgomery, Shoup, FermatShift
