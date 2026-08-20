@@ -108,6 +108,31 @@ lowerings selected deterministically from table size and required read ports.
 Generic recursive plans may group radix-2 stages into radix 4, 8, or larger
 power-of-two levels while preserving the executable reference semantics.
 
+## Hardware-friendly prime forms
+
+`primeinfo` classifies a field modulus as Goldilocks, Proth, pseudo-Mersenne,
+sparse Solinas, generalized Fermat, or generic. It reports two-adicity,
+cyclic/negacyclic transform limits, Montgomery-constant costs, lazy butterfly
+headroom, and the recommended constant-multiplier lowering:
+
+```bash
+./ngen.bat -q 40960001 primeinfo
+```
+
+`primegen` finds a prime of the form `k*2^(n+1)+1`, preferring low signed-digit
+weight in `k`, and prints a validated root and negacyclic twist:
+
+```bash
+./ngen.bat -n 10 -data-width 32 primegen
+```
+
+The arithmetic library includes executable generalized Proth SREDC and
+pseudo-Mersenne folding specifications, signed Solinas decomposition,
+Montgomery cost characterization, lazy-range tracking, and multi-prime RNS
+generation to a requested dynamic range. Generalized Fermat fields now accept
+non-power-of-two bases; those use Shoup lowering when digit-shift hardware is
+not applicable.
+
 Radix-2 PEs use a three-stage tagged arithmetic pipeline for Barrett,
 Montgomery, or Shoup multiplication. The same pipeline can be emitted as a
 standalone one-operation-per-cycle component with:

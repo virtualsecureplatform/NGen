@@ -45,6 +45,8 @@ enum Command:
   case ButterflyPipeline(modulus: Modulus, reduction: ReductionChoice, runtimeField: Boolean, output: Option[String], top: Option[String])
   case RnsPolynomial(basis: RnsBasis, emitCrt: Boolean, output: Option[String], top: Option[String])
   case GeneralNtt(plan: GeneralNttPlan, output: Option[String], top: Option[String])
+  case PrimeInfo(modulus: Modulus)
+  case PrimeGenerate(transformLog: Int, bitWidth: Int)
   case Presets
   case Version
   case Help
@@ -105,6 +107,8 @@ object Cli:
       |  butterflypipeline Generate a tagged three-stage modular butterfly pipeline.
       |  rnspolymul      Generate two NTTs, pointwise multiply, and INTT per RNS prime.
       |  generalntt      Generate a staged mixed-radix, four-step, or Bluestein transform.
+      |  primeinfo       Classify -q and report hardware reduction properties.
+      |  primegen        Find a negacyclic NTT prime using -n and -data-width.
       |  presets         List built-in field/domain presets.
       |  version         Print the NGen version.
       |
@@ -205,7 +209,7 @@ object Cli:
         case "-check" => check = true
         case "-nologo" => ()
         case "-h" | "--help" | "help" => terminal = Some("help")
-        case value @ ("ntt" | "intt" | "raintt" | "kyberpe" | "switchtranspose" | "butterflypipeline" | "rnspolymul" | "generalntt" | "presets" | "version") =>
+        case value @ ("ntt" | "intt" | "raintt" | "kyberpe" | "switchtranspose" | "butterflypipeline" | "rnspolymul" | "generalntt" | "primeinfo" | "primegen" | "presets" | "version") =>
           require(terminal.isEmpty, s"multiple transforms specified: ${terminal.get} and $value")
           terminal = Some(value)
         case unknown => throw new IllegalArgumentException(s"unknown argument: $unknown")
@@ -214,6 +218,12 @@ object Cli:
       case Some("help") => Command.Help
       case Some("presets") => Command.Presets
       case Some("version") => Command.Version
+      case Some("primeinfo") =>
+        require(preset.isEmpty && n.isEmpty && root.isEmpty && psi.isEmpty, "primeinfo uses only -q")
+        Command.PrimeInfo(Modulus(q.getOrElse(throw new IllegalArgumentException("primeinfo requires -q"))))
+      case Some("primegen") =>
+        require(preset.isEmpty && q.isEmpty && root.isEmpty && psi.isEmpty, "primegen uses -n and -data-width")
+        Command.PrimeGenerate(n.getOrElse(throw new IllegalArgumentException("primegen requires -n")),dataWidth)
       case Some("switchtranspose") =>
         require(preset.isEmpty && q.isEmpty && root.isEmpty && psi.isEmpty && baseCase.isEmpty && peCount.isEmpty, "switchtranspose uses -n and -data-width, not transform architecture options")
         val logSize = n.getOrElse(throw new IllegalArgumentException("switchtranspose requires -n"))
@@ -268,7 +278,7 @@ object Cli:
             require(generalizedFermatBase.isDefined && generalizedFermatIndex.isDefined, "generalized Fermat fields require both -fermat-base and -fermat-index")
             require(q.isEmpty && root.isEmpty && psi.isEmpty && baseCase.isEmpty, "generalized Fermat fields derive modulus and root")
             val base = generalizedFermatBase.get
-            require(base.isValidInt && Integer.bitCount(base.toInt) == 1, "hardware Fermat shift reduction currently requires a power-of-two base")
+            require(base > 1, "generalized Fermat base must exceed one")
             val logSize = n.getOrElse(throw new IllegalArgumentException("generalized Fermat fields require -n"))
             GeneralizedFermatField(base, generalizedFermatIndex.get).domain(logSize)
           case None =>

@@ -21,6 +21,8 @@ import ngen.rtl.GeneralNttGraph
 import ngen.rtl.SwitchTransposeSpec
 import ngen.rtl.{Architecture, ArchitectureKind, GenericNttGraph, PeNttSchedule, PipelineProfile, PresetBackend, ProfileName, Port, PortDirection, ReductionChoice, ReductionKind, StreamProtocol, StreamingContract, ValueFormat}
 import ngen.transform.{DataOrder, IncompleteNttPlan, NttPlan, StreamingNttPlan, SwitchBoundaryPlan}
+import ngen.transform.{NttFriendlyPrimeGenerator,PrimeGenerationRequest}
+import ngen.arithmetic.PrimeAnalyzer
 
 import java.nio.file.{Files, Path}
 
@@ -234,7 +236,11 @@ object Main:
         !config.domain.shape.isInstanceOf[ngen.algebra.TransformShape.IncompleteNegacyclic] &&
         config.reduction != ReductionChoice.Montgomery && config.reduction != ReductionChoice.Shoup && config.reduction != ReductionChoice.FermatShift && config.radixLog == 1 && config.peCount.isEmpty && config.protocol == StreamProtocol.NextPulse && config.transpose == ngen.rtl.TransposeKind.Indexed && !config.runtimeControl
       val reductionKind = config.reduction match
-        case ReductionChoice.Auto if config.domain.name.startsWith("fermat") || config.domain.name.startsWith("generalized-fermat") => ReductionKind.FermatShift
+        case ReductionChoice.Auto if config.domain.name.startsWith("fermat") => ReductionKind.FermatShift
+        case ReductionChoice.Auto if config.domain.name.startsWith("generalized-fermat") =>
+          PrimeAnalyzer.analyze(config.domain.modulus).form match
+            case ngen.arithmetic.PrimeForm.GeneralizedFermat(base,_) if base.isValidInt && Integer.bitCount(base.toInt)==1 => ReductionKind.FermatShift
+            case _ => ReductionKind.Shoup
         case ReductionChoice.Auto | ReductionChoice.Barrett => ReductionKind.Barrett
         case ReductionChoice.Montgomery => ReductionKind.Montgomery
         case ReductionChoice.Shoup => ReductionKind.Shoup
@@ -254,7 +260,20 @@ object Main:
         case ArchitectureKind.StageParallel => false
         case ArchitectureKind.Compact => false
       val useStageParallel = config.architecture == ArchitectureKind.StageParallel
-      var architectureParameters = Map.empty[String, Int]
+      val primeAnalysis=PrimeAnalyzer.analyze(config.domain.modulus)
+      val primeFormCode=primeAnalysis.form match
+        case ngen.arithmetic.PrimeForm.Goldilocks=>1
+        case _:ngen.arithmetic.PrimeForm.Proth=>2
+        case _:ngen.arithmetic.PrimeForm.PseudoMersenne=>3
+        case _:ngen.arithmetic.PrimeForm.SparseSolinas=>4
+        case _:ngen.arithmetic.PrimeForm.GeneralizedFermat=>5
+        case ngen.arithmetic.PrimeForm.Generic=>0
+      var architectureParameters = Map(
+        "prime_form"->primeFormCode,
+        "two_adicity"->primeAnalysis.twoAdicity,
+        "lazy_butterfly_levels"->primeAnalysis.lazyButterflyLevels,
+        "montgomery_signed_digits"->primeAnalysis.montgomery.map(_.signedDigits).min
+      )
       val architecture =
         if useStageParallel then
           require(config.domain.shape == ngen.algebra.TransformShape.Cyclic || config.domain.shape == ngen.algebra.TransformShape.Negacyclic,
@@ -278,7 +297,7 @@ object Main:
           val streamCycles = config.domain.size / config.streamingWidth
           val gap = if config.profile == ProfileName.F300 then 1 else 0
           val executionCycles = stageCount + math.max(0, stageCount - 1) * gap
-          architectureParameters = Map(
+          architectureParameters ++= Map(
             "stage_count" -> stageCount,
             "stage_gap" -> gap,
             "switch_transpose" -> (if useSwitchTranspose then 1 else 0),
@@ -321,7 +340,7 @@ object Main:
           val requestedPeCount = config.peCount.getOrElse(math.max(1, config.streamingWidth / 2))
           val schedule = PeNttSchedule.build(plan, config.radixLog, requestedPeCount, config.streamingWidth)
           val metrics = PeStreamingNttSystemVerilog.metrics(schedule, config.streamingWidth, config.profile)
-          architectureParameters = Map(
+          architectureParameters ++= Map(
             "pe_count" -> metrics.peCount,
             "radix" -> metrics.radix,
             "bank_count_per_buffer" -> metrics.bankCount,
@@ -372,6 +391,22 @@ object Main:
         case Command.Version => println(Cli.Version)
         case Command.Presets =>
           Domains.all.foreach(domain => println(s"${domain.name}\tq=${domain.modulus.q}\tN=${domain.size}\t${domain.description}"))
+        case Command.PrimeInfo(modulus) =>
+          val analysis=PrimeAnalyzer.analyze(modulus)
+          println(s"modulus=${modulus.q}")
+          println(s"form=${analysis.form}")
+          println(s"two_adicity=${analysis.twoAdicity}")
+          println(s"maximum_cyclic_log_size=${analysis.maximumCyclicLogSize}")
+          println(s"maximum_negacyclic_log_size=${analysis.maximumNegacyclicLogSize}")
+          println(s"recommended_multiplier=${analysis.recommendedMultiplier}")
+          println(s"lazy_butterfly_levels=${analysis.lazyButterflyLevels}")
+          analysis.montgomery.foreach(cost=>println(s"montgomery_${cost.wordBits}=qinv:${cost.qInverse},bits:${cost.nonzeroBits},signed_digits:${cost.signedDigits}"))
+        case Command.PrimeGenerate(transformLog,bitWidth) =>
+          val domain=NttFriendlyPrimeGenerator.generate(PrimeGenerationRequest(transformLog,bitWidth)).head
+          println(s"q=${domain.modulus.q}")
+          println(s"root=${domain.root}")
+          println(s"psi=${domain.twist.get}")
+          println(s"reduction=${PrimeAnalyzer.analyze(domain.modulus).recommendedMultiplier}")
         case Command.SwitchTranspose(logSize, dataWidth, outputName, topName) =>
           val output = Path.of(outputName.getOrElse("switch-transpose.sv"))
           Option(output.getParent).foreach(Files.createDirectories(_))

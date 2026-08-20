@@ -7,6 +7,12 @@ import ngen.rtl.{ProfileName, ReductionChoice, StreamProtocol, TransposeKind}
 import org.scalatest.funsuite.AnyFunSuite
 
 class CliSpec extends AnyFunSuite:
+  test("prime analysis and generation commands expose hardware-friendly fields"):
+    assert(Cli.parse(Seq("-q","40960001","primeinfo"))==Command.PrimeInfo(ngen.algebra.Modulus(40960001)))
+    assert(Cli.parse(Seq("-n","8","-data-width","32","primegen"))==Command.PrimeGenerate(8,32))
+    Cli.parse(Seq("-n","1","-fermat-base","10","-fermat-index","1","ntt")) match
+      case Command.Generate(config)=>assert(config.domain.modulus.q==101)
+      case other=>fail(s"expected generalized Fermat generation, got $other")
   test("SGen-style preset options precede the transform"):
     val command = Cli.parse(Seq("-preset", "yata512", "-k", "6", "-r", "3", "-check", "ntt"))
     val config = command match
