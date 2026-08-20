@@ -119,11 +119,11 @@ object Main:
     if !genericDomain then
       require(config.architecture != ArchitectureKind.FullyParallel, "preset backends do not use the generic fully-parallel architecture")
       require(config.reduction == ReductionChoice.Auto, "preset backends select their field reduction automatically")
-      require(config.protocol == StreamProtocol.NextPulse, "preset backends currently use the next-pulse protocol")
       require(config.inputOrder == DataOrder.Natural && config.outputOrder == DataOrder.Natural,
         "preset backends currently expose natural-order streams only")
     if config.direction == Direction.Both then
       if config.domain.name == "kyber256" then
+        require(config.protocol == StreamProtocol.NextPulse, "Kyber preset currently uses the next-pulse protocol")
         require(!Set(PresetBackend.StageParallel, PresetBackend.FullThroughput)(effectivePresetBackend), "full-throughput/stage-parallel preset backend is not implemented for Kyber PE1")
         require(config.streamingLog == 0 && config.radixLog == 1, "kyberpe requires -k 0 -r 1")
         val output = Path.of(config.output.getOrElse("KyberHPM1PE.v"))
@@ -145,13 +145,15 @@ object Main:
         case _ => "YataRainttTop"
       val top = config.top.getOrElse(defaultTop)
       val useFullThroughput = effectivePresetBackend == PresetBackend.FullThroughput
+      require(config.protocol == StreamProtocol.NextPulse || useFullThroughput,
+        "ready-valid YATA requires the full-throughput backend")
       require(!useFullThroughput || config.transpose == ngen.rtl.TransposeKind.Indexed, "YATA full-throughput mode currently uses indexed stream boundaries")
       val usePipelined = config.transpose == ngen.rtl.TransposeKind.Indexed && (effectivePresetBackend match
         case PresetBackend.StageParallel | PresetBackend.FullThroughput => true
         case PresetBackend.Microcoded | PresetBackend.Compact => false
         case PresetBackend.Auto => config.domain.name.startsWith("yata"))
       val rtl =
-        if useFullThroughput then YataFullThroughputSystemVerilog.emit(config.domain.logSize,config.streamingLog,config.profile,top)
+        if useFullThroughput then YataFullThroughputSystemVerilog.emit(config.domain.logSize,config.streamingLog,config.profile,top,config.protocol)
         else if usePipelined then YataPipelinedSystemVerilog.emit(config.domain.logSize, config.streamingLog, config.profile, top, config.transpose)
         else YataMicrocodedSystemVerilog.emit(config.domain.logSize, config.streamingLog, config.profile, top, config.transpose)
       Files.writeString(output, rtl)
@@ -166,12 +168,14 @@ object Main:
         if config.transpose != ngen.rtl.TransposeKind.Switch || cycles == 1 then 0
         else if config.streamingWidth == cycles then cycles - 1
         else 2 * cycles - 1
-      writePresetArtifacts(config, output, "YataSredc", cycles, cycles, schedule._1.max(schedule._2) + 2 + switchOverhead,
+      val yataWait = if useFullThroughput then YataFullThroughputSystemVerilog.pipelineDepth(config.domain.logSize) else schedule._1.max(schedule._2) + 2 + switchOverhead
+      writePresetArtifacts(config, output, "YataSredc", cycles, cycles, yataWait,
         if useFullThroughput then cycles else schedule._1.max(schedule._2),
-        Some(if useFullThroughput then "yata-full-throughput-radix8" else if usePipelined then "yata-stage-parallel-radix8" else "yata-microcoded-radix8"))
+        Some(if useFullThroughput then "yata-full-throughput-recursive-radix8" else if usePipelined then "yata-stage-parallel-radix8" else "yata-microcoded-radix8"))
       println(s"Written design in $output.")
       true
     else if config.domain.name == "hoge32" then
+      require(config.protocol == StreamProtocol.NextPulse, "HOGE preset currently uses the next-pulse protocol")
       require(!Set(PresetBackend.StageParallel, PresetBackend.FullThroughput)(effectivePresetBackend), "stage-parallel/full-throughput preset backend requires hoge1024")
       require(config.transpose == ngen.rtl.TransposeKind.Indexed, "hoge32 has no streaming transpose boundary")
       require(config.streamingLog == 5 && config.radixLog == 5, "hoge32 requires -k 5 -r 5")
@@ -182,6 +186,7 @@ object Main:
       println(s"Written design in $output.")
       true
     else if config.domain.name == "hoge1024" then
+      require(config.protocol == StreamProtocol.NextPulse, "HOGE preset currently uses the next-pulse protocol")
       require(config.streamingLog == 5 && config.radixLog == 5, "hoge1024 requires -k 5 -r 5")
       val output = Path.of(config.output.getOrElse("design.v"))
       Option(output.getParent).foreach(Files.createDirectories(_))

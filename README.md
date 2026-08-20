@@ -93,11 +93,20 @@ on the streamed backend.
 
 The SGen-style names are `full-throughput` for an acyclic zero-gap pipeline and
 `compact` for hardware-reusing/interleaved execution. Existing `streamed`,
-`microcoded`, and `stage-parallel` names remain accepted. YATA presets currently
-implement `full-throughput` with three round-robin stage engines, sustaining one
-new eight-cycle dataset every eight cycles. HOGE NTT/INTT use deeply pipelined
+`microcoded`, and `stage-parallel` names remain accepted. YATA presets implement
+`full-throughput` as one native recursive radix-8 transaction pipeline,
+sustaining one new eight-cycle dataset every eight cycles without replicating
+complete engines. HOGE NTT/INTT use deeply pipelined
 recursive radix-32 datapaths and streaming switch transposes; both accept a new
 1024-point dataset every 32 cycles with no inter-dataset gap.
+
+YATA full-throughput also accepts `-protocol ready-valid`. This adds elastic
+stall control across capture, recursive stages, and output. The default
+`-protocol next` source omits the ready ports and all stall/backpressure logic.
+Twiddle tables have reusable inline, distributed-ROM, and banked block-ROM
+lowerings selected deterministically from table size and required read ports.
+Generic recursive plans may group radix-2 stages into radix 4, 8, or larger
+power-of-two levels while preserving the executable reference semantics.
 
 Radix-2 PEs use a three-stage tagged arithmetic pipeline for Barrett,
 Montgomery, or Shoup multiplication. The same pipeline can be emitted as a

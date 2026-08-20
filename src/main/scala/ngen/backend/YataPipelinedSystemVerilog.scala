@@ -13,7 +13,7 @@ import ngen.rtl.{ProfileName, TransposeKind}
   * a radix stage behind one registered stage boundary.
   */
 object YataPipelinedSystemVerilog:
-  private final case class Stage(label: String, lines: Vector[String])
+  private[backend] final case class Stage(label: String, lines: Vector[String])
 
   private def reverse3(value: Int): Int = ((value & 1) << 2) | (value & 2) | ((value & 4) >> 2)
   private def lit(value: Long): String = if value < 0 then s"27'sd${-value}" else s"27'sd$value"
@@ -121,7 +121,7 @@ object YataPipelinedSystemVerilog:
       result += s"stage_next[$right] = yata_sredc(tmp - stage_next[$right]);"
     result.toVector
 
-  private def inverseStages(logSize: Int, tables: YataTables): Vector[Stage] =
+  private[backend] def inverseStages(logSize: Int, tables: YataTables): Vector[Stage] =
     val size = 1 << logSize
     val result = scala.collection.mutable.ArrayBuffer.empty[Stage]
     result += Stage("inverse_twist", Vector.tabulate(size)(index => s"stage_next[$index] = yata_mulredc(work[$index][26:0], ${lit(tables.inttTwist(index))});"))
@@ -145,7 +145,7 @@ object YataPipelinedSystemVerilog:
     result += Stage("inverse_radix8_final", lines.toVector)
     result.toVector
 
-  private def forwardStages(logSize: Int, tables: YataTables): Vector[Stage] =
+  private[backend] def forwardStages(logSize: Int, tables: YataTables): Vector[Stage] =
     val size = 1 << logSize
     val result = scala.collection.mutable.ArrayBuffer.empty[Stage]
     val initial = scala.collection.mutable.ArrayBuffer.empty[String]
