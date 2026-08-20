@@ -5,9 +5,11 @@ import ngen.cli.{Cli, Command, Direction, GeneratorConfig}
 import ngen.transform.ReferenceNtt
 import ngen.backend.YataMicrocodedSystemVerilog
 import ngen.backend.YataPipelinedSystemVerilog
+import ngen.backend.YataFullThroughputSystemVerilog
 import ngen.backend.{DesignMetadata, GraphSystemVerilog, TransformDot}
 import ngen.backend.HogeSystemVerilog
 import ngen.backend.HogePipelinedSystemVerilog
+import ngen.backend.HogeFullThroughputSystemVerilog
 import ngen.backend.KyberSystemVerilog
 import ngen.backend.SwitchTransposeSystemVerilog
 import ngen.backend.PeStreamingNttSystemVerilog
@@ -44,6 +46,8 @@ object Main:
       case "kyber256" => "kyber-pe1"
       case _ => config.architecture.toString.toLowerCase)
     val base = artifactBase(output)
+    val fullThroughput = architecture.contains("full-throughput")
+    val minimumGap = math.max(0, initiationInterval - inputCycles)
     val json = s"""{
       |  "schema": "ngen-design-v1",
       |  "generator_version": "${Cli.Version}",
@@ -63,6 +67,9 @@ object Main:
       |  "reduction": "$reduction",
       |  "latency": $latency,
       |  "initiation_interval": $initiationInterval,
+      |  "minimum_gap": $minimumGap,
+      |  "full_throughput": $fullThroughput,
+      |  "pipeline_depth": $latency,
       |  "input_cycles": $inputCycles,
       |  "output_cycles": $outputCycles,
       |  "dependencies": [],
@@ -96,15 +103,28 @@ object Main:
   private def emit(config: GeneratorConfig): Boolean =
     val genericDomain = config.domain.name == "custom" || config.domain.name.startsWith("fermat") || config.domain.name.startsWith("generalized-fermat")
     if genericDomain then require(config.presetBackend == PresetBackend.Auto, "-preset-backend is only valid with a built-in preset")
+    val architectureBackend = config.architecture match
+      case ArchitectureKind.Auto => None
+      case ArchitectureKind.FullThroughput => Some(PresetBackend.FullThroughput)
+      case ArchitectureKind.Compact | ArchitectureKind.Streamed => Some(PresetBackend.Compact)
+      case ArchitectureKind.StageParallel => Some(PresetBackend.StageParallel)
+      case ArchitectureKind.FullyParallel => None
+    val effectivePresetBackend =
+      if genericDomain then PresetBackend.Auto
+      else
+        val explicit = if config.presetBackend == PresetBackend.Auto then None else Some(config.presetBackend)
+        require(explicit.isEmpty || architectureBackend.isEmpty || explicit == architectureBackend,
+          "-architecture and -preset-backend select conflicting preset implementations")
+        explicit.orElse(architectureBackend).getOrElse(PresetBackend.Auto)
     if !genericDomain then
-      require(config.architecture == ArchitectureKind.Auto, "preset backends select their architecture automatically")
+      require(config.architecture != ArchitectureKind.FullyParallel, "preset backends do not use the generic fully-parallel architecture")
       require(config.reduction == ReductionChoice.Auto, "preset backends select their field reduction automatically")
       require(config.protocol == StreamProtocol.NextPulse, "preset backends currently use the next-pulse protocol")
       require(config.inputOrder == DataOrder.Natural && config.outputOrder == DataOrder.Natural,
         "preset backends currently expose natural-order streams only")
     if config.direction == Direction.Both then
       if config.domain.name == "kyber256" then
-        require(config.presetBackend != PresetBackend.StageParallel, "stage-parallel preset backend is not implemented for Kyber PE1")
+        require(!Set(PresetBackend.StageParallel, PresetBackend.FullThroughput)(effectivePresetBackend), "full-throughput/stage-parallel preset backend is not implemented for Kyber PE1")
         require(config.streamingLog == 0 && config.radixLog == 1, "kyberpe requires -k 0 -r 1")
         val output = Path.of(config.output.getOrElse("KyberHPM1PE.v"))
         Option(output.getParent).foreach(Files.createDirectories(_))
@@ -124,12 +144,15 @@ object Main:
         case "yata64" => "SmallYata8x8RainttP27Rtl"
         case _ => "YataRainttTop"
       val top = config.top.getOrElse(defaultTop)
-      val usePipelined = config.transpose == ngen.rtl.TransposeKind.Indexed && (config.presetBackend match
-        case PresetBackend.StageParallel => true
-        case PresetBackend.Microcoded => false
+      val useFullThroughput = effectivePresetBackend == PresetBackend.FullThroughput
+      require(!useFullThroughput || config.transpose == ngen.rtl.TransposeKind.Indexed, "YATA full-throughput mode currently uses indexed stream boundaries")
+      val usePipelined = config.transpose == ngen.rtl.TransposeKind.Indexed && (effectivePresetBackend match
+        case PresetBackend.StageParallel | PresetBackend.FullThroughput => true
+        case PresetBackend.Microcoded | PresetBackend.Compact => false
         case PresetBackend.Auto => config.domain.name.startsWith("yata"))
       val rtl =
-        if usePipelined then YataPipelinedSystemVerilog.emit(config.domain.logSize, config.streamingLog, config.profile, top, config.transpose)
+        if useFullThroughput then YataFullThroughputSystemVerilog.emit(config.domain.logSize,config.streamingLog,config.profile,top)
+        else if usePipelined then YataPipelinedSystemVerilog.emit(config.domain.logSize, config.streamingLog, config.profile, top, config.transpose)
         else YataMicrocodedSystemVerilog.emit(config.domain.logSize, config.streamingLog, config.profile, top, config.transpose)
       Files.writeString(output, rtl)
       val cycles = config.domain.size / config.streamingWidth
@@ -143,12 +166,13 @@ object Main:
         if config.transpose != ngen.rtl.TransposeKind.Switch || cycles == 1 then 0
         else if config.streamingWidth == cycles then cycles - 1
         else 2 * cycles - 1
-      writePresetArtifacts(config, output, "YataSredc", cycles, cycles, schedule._1.max(schedule._2) + 2 + switchOverhead, schedule._1.max(schedule._2),
-        Some(if usePipelined then "yata-stage-parallel-radix8" else "yata-microcoded-radix8"))
+      writePresetArtifacts(config, output, "YataSredc", cycles, cycles, schedule._1.max(schedule._2) + 2 + switchOverhead,
+        if useFullThroughput then cycles else schedule._1.max(schedule._2),
+        Some(if useFullThroughput then "yata-full-throughput-radix8" else if usePipelined then "yata-stage-parallel-radix8" else "yata-microcoded-radix8"))
       println(s"Written design in $output.")
       true
     else if config.domain.name == "hoge32" then
-      require(config.presetBackend != PresetBackend.StageParallel, "stage-parallel preset backend requires hoge1024")
+      require(!Set(PresetBackend.StageParallel, PresetBackend.FullThroughput)(effectivePresetBackend), "stage-parallel/full-throughput preset backend requires hoge1024")
       require(config.transpose == ngen.rtl.TransposeKind.Indexed, "hoge32 has no streaming transpose boundary")
       require(config.streamingLog == 5 && config.radixLog == 5, "hoge32 requires -k 5 -r 5")
       val output = Path.of(config.output.getOrElse("design.sv"))
@@ -163,14 +187,19 @@ object Main:
       Option(output.getParent).foreach(Files.createDirectories(_))
       val inverse = config.direction == Direction.Inverse
       val top = config.top.getOrElse(if inverse then "INTTWrap" else "NTTWrap")
-      val usePipelined = config.transpose == ngen.rtl.TransposeKind.Indexed && config.presetBackend == PresetBackend.StageParallel
+      val useFullThroughput = effectivePresetBackend == PresetBackend.FullThroughput
+      require(!useFullThroughput || config.transpose == ngen.rtl.TransposeKind.Switch,
+        "HOGE full-throughput requires -transpose switch")
+      val usePipelined = config.transpose == ngen.rtl.TransposeKind.Indexed && effectivePresetBackend == PresetBackend.StageParallel
       val rtl =
-        if usePipelined then HogePipelinedSystemVerilog.emit(top, inverse, config.profile, config.transpose)
+        if useFullThroughput then HogeFullThroughputSystemVerilog.emit(top, inverse, config.profile, config.transpose)
+        else if usePipelined then HogePipelinedSystemVerilog.emit(top, inverse, config.profile, config.transpose)
         else if inverse then HogeSystemVerilog.emitStreamingIntt(top, config.profile, config.transpose)
         else HogeSystemVerilog.emitStreamingNtt(top, config.profile, config.transpose)
       Files.writeString(output, rtl)
       val bundles =
-        if usePipelined then
+        if useFullThroughput then HogeFullThroughputSystemVerilog.RadixPipelineDepth * 2 + (if inverse then 31 else 62)
+        else if usePipelined then
           val (inverseStages, forwardStages) = HogePipelinedSystemVerilog.stageCounts(10, 5)
           val stageCount = if inverse then inverseStages else forwardStages
           stageCount + math.max(0, stageCount - 1) * (if config.profile == ProfileName.F300 then 1 else 0)
@@ -179,8 +208,11 @@ object Main:
         case ngen.rtl.TransposeKind.Indexed => 0
         case ngen.rtl.TransposeKind.Switch => 31
         case ngen.rtl.TransposeKind.Distributed => 47
-      writePresetArtifacts(config, output, "Goldilocks", 32, 32, bundles + 2 + switchOverhead, bundles,
-        Some(if usePipelined then "hoge-stage-parallel-radix32"
+      val maxWaitCycles = if useFullThroughput then (if inverse then 9 else 40) else bundles + 2 + switchOverhead
+      writePresetArtifacts(config, output, "Goldilocks", 32, 32, maxWaitCycles,
+        if useFullThroughput then 32 else bundles,
+        Some(if useFullThroughput then "hoge-full-throughput-recursive-radix32"
+        else if usePipelined then "hoge-stage-parallel-radix32"
         else if config.transpose == ngen.rtl.TransposeKind.Distributed then "hoge-distributed-transpose-radix32"
         else "hoge-streamed-radix32"))
       println(s"Written design in $output.")
@@ -209,8 +241,13 @@ object Main:
         case ArchitectureKind.FullyParallel =>
           require(fullyParallelCompatible, "fully-parallel custom RTL requires K=N, radix 2, natural stream order, a complete transform, and no -pe override")
           true
+        case ArchitectureKind.FullThroughput =>
+          require(fullyParallelCompatible,
+            "generic full-throughput currently requires K=N, radix 2, natural stream order, a complete transform, and no PE override")
+          true
         case ArchitectureKind.Streamed => false
         case ArchitectureKind.StageParallel => false
+        case ArchitectureKind.Compact => false
       val useStageParallel = config.architecture == ArchitectureKind.StageParallel
       var architectureParameters = Map.empty[String, Int]
       val architecture =
@@ -257,7 +294,7 @@ object Main:
           val graph = GenericNttGraph.build(config.domain, inverse, profile)
           Files.writeString(output, GraphSystemVerilog.emit(graph, config.domain, top))
           Architecture(
-            s"custom-${if inverse then "intt" else "ntt"}-fully-parallel",
+            s"custom-${if inverse then "intt" else "ntt"}-${if config.architecture == ArchitectureKind.FullThroughput then "full-throughput" else "fully-parallel"}",
             Vector(Port("clock", PortDirection.Input, ValueFormat.Valid), Port("reset", PortDirection.Input, ValueFormat.Valid), Port("next", PortDirection.Input, ValueFormat.Valid)),
             Vector(graph), Vector.empty, Vector.empty,
             StreamingContract(config.domain.size, config.domain.size, 1, 1, graph.latency, 1),

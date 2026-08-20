@@ -40,7 +40,7 @@ def main() -> int:
     parser.add_argument("--llm-ntt-root", type=Path, default=ROOT.parent / "LLM-NTT-Examples")
     parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--profile", choices=("baseline", "f300"), default="baseline")
-    parser.add_argument("--preset-backend", choices=("auto", "microcoded", "stage-parallel"), default="auto")
+    parser.add_argument("--preset-backend", choices=("auto", "microcoded", "stage-parallel", "full-throughput", "compact"), default="auto")
     parser.add_argument("--transpose", choices=("indexed", "switch", "distributed"), default="indexed")
     parser.add_argument("--with-yosys", action="store_true")
     parser.add_argument("--ngen", type=Path, default=ROOT / "ngen.bat")

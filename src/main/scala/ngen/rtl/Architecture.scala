@@ -39,7 +39,7 @@ object ReductionChoice:
     case other => throw new IllegalArgumentException(s"unknown reduction '$other'; expected auto, barrett, montgomery, shoup, or fermat-shift")
 
 enum ArchitectureKind:
-  case Auto, FullyParallel, Streamed, StageParallel
+  case Auto, FullyParallel, Streamed, StageParallel, FullThroughput, Compact
 
 object ArchitectureKind:
   def parse(value: String): ArchitectureKind = value.toLowerCase.replace("-", "") match
@@ -47,17 +47,21 @@ object ArchitectureKind:
     case "fullyparallel" | "parallel" => ArchitectureKind.FullyParallel
     case "streamed" | "streaming" => ArchitectureKind.Streamed
     case "stageparallel" | "pipeline" | "pipelined" => ArchitectureKind.StageParallel
-    case other => throw new IllegalArgumentException(s"unknown architecture '$other'; expected auto, fully-parallel, streamed, or stage-parallel")
+    case "fullthroughput" | "dataflow" | "recursivepipeline" => ArchitectureKind.FullThroughput
+    case "compact" | "interleaved" | "serialized" => ArchitectureKind.Compact
+    case other => throw new IllegalArgumentException(s"unknown architecture '$other'; expected auto, fully-parallel, streamed, stage-parallel, full-throughput, or compact")
 
 enum PresetBackend:
-  case Auto, Microcoded, StageParallel
+  case Auto, Microcoded, StageParallel, FullThroughput, Compact
 
 object PresetBackend:
   def parse(value: String): PresetBackend = value.toLowerCase.replace("-", "") match
     case "auto" => PresetBackend.Auto
     case "microcoded" | "microcode" => PresetBackend.Microcoded
     case "stageparallel" | "pipeline" | "pipelined" => PresetBackend.StageParallel
-    case other => throw new IllegalArgumentException(s"unknown preset backend '$other'; expected auto, microcoded, or stage-parallel")
+    case "fullthroughput" | "dataflow" | "recursivepipeline" => PresetBackend.FullThroughput
+    case "compact" | "interleaved" | "serialized" => PresetBackend.Compact
+    case other => throw new IllegalArgumentException(s"unknown preset backend '$other'; expected auto, microcoded, stage-parallel, full-throughput, or compact")
 
 enum TransposeKind:
   case Indexed, Switch, Distributed

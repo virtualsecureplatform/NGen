@@ -90,6 +90,25 @@ def compare(task: str, reference: dict[str, Any], candidate: dict[str, Any]) -> 
             result.setdefault("reference_resources", {})[name] = reference["metrics"][name]
         if name in candidate.get("metrics", {}):
             result.setdefault("candidate_resources", {})[name] = candidate["metrics"][name]
+    resource_ratios = {}
+    for name in ("vitis_lut", "vitis_ff", "vitis_dsp", "vitis_bram_tile"):
+        ref_value = reference.get("metrics", {}).get(name)
+        cand_value = candidate.get("metrics", {}).get(name)
+        if isinstance(ref_value, (int, float)) and isinstance(cand_value, (int, float)) and ref_value:
+            resource_ratios[name] = cand_value / ref_value
+    if resource_ratios:
+        result["resource_ratios"] = resource_ratios
+    latency_ok = result.get("transaction_ratio", float("inf")) <= 1.0
+    resources_ok = bool(resource_ratios) and all(value <= 1.25 for value in resource_ratios.values())
+    timing_value = candidate.get("metrics", {}).get("vitis_timing_wns_ns")
+    timing_ok = isinstance(timing_value, (int, float)) and timing_value >= 0
+    result["competitive_gate"] = {
+        "correct": result["correct"],
+        "latency": latency_ok,
+        "resources": resources_ok,
+        "timing_4ns": timing_ok,
+        "passed": result["correct"] and latency_ok and resources_ok and timing_ok,
+    }
     return result
 
 
@@ -101,7 +120,7 @@ def main() -> int:
     parser.add_argument("--candidate-root", type=Path, default=root / "build" / "preset-benchmarks")
     parser.add_argument("--run", action="store_true", help="generate and evaluate candidates before comparing")
     parser.add_argument("--with-yosys", action="store_true")
-    parser.add_argument("--preset-backend", choices=("auto", "microcoded", "stage-parallel"), default="auto")
+    parser.add_argument("--preset-backend", choices=("auto", "microcoded", "stage-parallel", "full-throughput", "compact"), default="auto")
     parser.add_argument("--transpose", choices=("indexed", "switch", "distributed"), default="indexed")
     args = parser.parse_args()
     tasks = args.task or list(TASKS)

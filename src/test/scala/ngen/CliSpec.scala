@@ -74,6 +74,12 @@ class CliSpec extends AnyFunSuite:
       case Command.Generate(config) => assert(config.transpose == ngen.rtl.TransposeKind.Distributed)
       case other => fail(s"expected generation command, got $other")
 
+  test("SGen-style full-throughput and compact architecture names parse"):
+    assert(ngen.rtl.ArchitectureKind.parse("full-throughput") == ngen.rtl.ArchitectureKind.FullThroughput)
+    assert(ngen.rtl.ArchitectureKind.parse("compact") == ngen.rtl.ArchitectureKind.Compact)
+    assert(ngen.rtl.PresetBackend.parse("full-throughput") == ngen.rtl.PresetBackend.FullThroughput)
+    assert(ngen.rtl.PresetBackend.parse("interleaved") == ngen.rtl.PresetBackend.Compact)
+
   test("switch transpose has an SGen-style terminal command"):
     val command = Cli.parse(Seq("-n", "3", "-data-width", "16", "-o", "transpose.sv", "switchtranspose"))
     assert(command == Command.SwitchTranspose(3, 16, Some("transpose.sv"), None))

@@ -23,6 +23,8 @@ final case class DesignMetadata(
       case ProfileName.Baseline => "baseline"
       case ProfileName.F300 => "f300"
     val parameters = architectureParameters.toVector.sortBy(_._1).map { case (name, value) => s"    ${quote(name)}: $value" }.mkString(",\n")
+    val fullThroughput = architecture.name.contains("full-throughput")
+    val minimumGap = math.max(0, architecture.contract.initiationInterval - architecture.contract.inputCycles)
     s"""{
        |  "schema": "ngen-design-v1",
        |  "generator_version": ${quote(generatorVersion)},
@@ -40,6 +42,9 @@ final case class DesignMetadata(
        |  "reduction": ${quote(architecture.reduction.toString)},
        |  "latency": ${architecture.contract.latency},
        |  "initiation_interval": ${architecture.contract.initiationInterval},
+       |  "minimum_gap": $minimumGap,
+       |  "full_throughput": $fullThroughput,
+       |  "pipeline_depth": ${architecture.contract.latency},
        |  "input_cycles": ${architecture.contract.inputCycles},
        |  "output_cycles": ${architecture.contract.outputCycles},
        |  "architecture_parameters": {

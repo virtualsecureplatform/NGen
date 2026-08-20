@@ -66,7 +66,7 @@ logarithms. Pipeline profiles are `baseline` and `f300`; the latter adds a
 scheduling gap between microcoded bundles or uses the deeper generic graph
 latencies. `f300` is a pipeline intent, not a vendor timing guarantee.
 
-For custom domains, `-architecture auto|fully-parallel|streamed` controls the
+For custom domains, `-architecture auto|full-throughput|compact|fully-parallel|streamed|stage-parallel` controls the
 lowering. `auto` preserves the fully-parallel v0.1 implementation when `K=N`
 and otherwise selects the streamed state machine. Streamed designs expose
 `ready`, accept `next` with the first input chunk, and can overlap a new first
@@ -90,6 +90,14 @@ stream orders. This is a fully unrolled stage datapath, so it is a useful
 throughput/timing baseline and a substrate for later banked or PE-limited
 implementations; incomplete Kyber-style plans and Fermat-shift reduction remain
 on the streamed backend.
+
+The SGen-style names are `full-throughput` for an acyclic zero-gap pipeline and
+`compact` for hardware-reusing/interleaved execution. Existing `streamed`,
+`microcoded`, and `stage-parallel` names remain accepted. YATA presets currently
+implement `full-throughput` with three round-robin stage engines, sustaining one
+new eight-cycle dataset every eight cycles. HOGE NTT/INTT use deeply pipelined
+recursive radix-32 datapaths and streaming switch transposes; both accept a new
+1024-point dataset every 32 cycles with no inter-dataset gap.
 
 Radix-2 PEs use a three-stage tagged arithmetic pipeline for Barrett,
 Montgomery, or Shoup multiplication. The same pipeline can be emitted as a
