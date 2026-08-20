@@ -82,6 +82,15 @@ object StreamProtocol:
     case "readyvalid" | "rv" => StreamProtocol.ReadyValid
     case other => throw new IllegalArgumentException(s"unknown stream protocol '$other'; expected next or ready-valid")
 
+enum InterfaceKind:
+  case Raw, Axi4Stream
+
+object InterfaceKind:
+  def parse(value:String):InterfaceKind=value.toLowerCase.replace("-","") match
+    case "raw"=>InterfaceKind.Raw
+    case "axi4stream"|"axis"=>InterfaceKind.Axi4Stream
+    case other=>throw new IllegalArgumentException(s"unknown interface '$other'; expected raw or axi4stream")
+
 enum PortDirection:
   case Input, Output
 

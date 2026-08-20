@@ -17,9 +17,11 @@ import ngen.backend.StageParallelNttSystemVerilog
 import ngen.backend.GenericSwitchTransposeWrapper
 import ngen.backend.PipelinedButterflySystemVerilog
 import ngen.backend.RnsPolynomialMultiplierSystemVerilog
+import ngen.backend.Axi4StreamWrapper
+import ngen.backend.{FusedTwiddleButterflySystemVerilog,PrimeReductionSystemVerilog}
 import ngen.rtl.GeneralNttGraph
 import ngen.rtl.SwitchTransposeSpec
-import ngen.rtl.{Architecture, ArchitectureKind, GenericNttGraph, PeNttSchedule, PipelineProfile, PresetBackend, ProfileName, Port, PortDirection, ReductionChoice, ReductionKind, StreamProtocol, StreamingContract, ValueFormat}
+import ngen.rtl.{Architecture, ArchitectureKind, ArithmeticLoweringPlan, GenericNttGraph, InterfaceKind, PeNttSchedule, PipelineProfile, PresetBackend, ProfileName, Port, PortDirection, ReductionChoice, ReductionKind, StreamProtocol, StreamingContract, ValueFormat}
 import ngen.transform.{DataOrder, IncompleteNttPlan, NttPlan, StreamingNttPlan, SwitchBoundaryPlan}
 import ngen.transform.{NttFriendlyPrimeGenerator,PrimeGenerationRequest}
 import ngen.arithmetic.PrimeAnalyzer
@@ -119,6 +121,7 @@ object Main:
           "-architecture and -preset-backend select conflicting preset implementations")
         explicit.orElse(architectureBackend).getOrElse(PresetBackend.Auto)
     if !genericDomain then
+      require(config.interfaceKind==InterfaceKind.Raw,"AXI4-Stream is currently supported by custom streaming NTTs")
       require(config.architecture != ArchitectureKind.FullyParallel, "preset backends do not use the generic fully-parallel architecture")
       require(config.reduction == ReductionChoice.Auto, "preset backends select their field reduction automatically")
       require(config.inputOrder == DataOrder.Natural && config.outputOrder == DataOrder.Natural,
@@ -226,6 +229,8 @@ object Main:
       true
     else if genericDomain then
       require(config.transpose != ngen.rtl.TransposeKind.Distributed, "distributed transpose is currently a HOGE forward architecture")
+      require(config.interfaceKind==InterfaceKind.Raw || config.transpose==ngen.rtl.TransposeKind.Indexed,
+        "AXI4-Stream currently requires indexed stream boundaries")
       val profile = PipelineProfile.named(config.profile)
       val inverse = config.direction == Direction.Inverse
       val output = Path.of(config.output.getOrElse("design.sv"))
@@ -261,6 +266,7 @@ object Main:
         case ArchitectureKind.Compact => false
       val useStageParallel = config.architecture == ArchitectureKind.StageParallel
       val primeAnalysis=PrimeAnalyzer.analyze(config.domain.modulus)
+      val arithmeticPlan=ArithmeticLoweringPlan.build(config.domain.modulus,config.domain.logSize,config.domain.modulus.bitWidth+2)
       val primeFormCode=primeAnalysis.form match
         case ngen.arithmetic.PrimeForm.Goldilocks=>1
         case _:ngen.arithmetic.PrimeForm.Proth=>2
@@ -269,10 +275,14 @@ object Main:
         case _:ngen.arithmetic.PrimeForm.GeneralizedFermat=>5
         case ngen.arithmetic.PrimeForm.Generic=>0
       var architectureParameters = Map(
+        "axi4stream"->(if config.interfaceKind==InterfaceKind.Axi4Stream then 1 else 0),
         "prime_form"->primeFormCode,
         "two_adicity"->primeAnalysis.twoAdicity,
         "lazy_butterfly_levels"->primeAnalysis.lazyButterflyLevels,
         "montgomery_signed_digits"->primeAnalysis.montgomery.map(_.signedDigits).min
+        ,"dsp_multiplier_tiles"->arithmeticPlan.multiplier.dspCount
+        ,"dsp_partial_adder_levels"->arithmeticPlan.multiplier.adderLevels
+        ,"lazy_correction_points"->arithmeticPlan.lazySchedule.correctionAfter.size
       )
       val architecture =
         if useStageParallel then
@@ -351,10 +361,12 @@ object Main:
             "runtime_control" -> (if config.runtimeControl then 1 else 0),
             "control_record_width" -> PeStreamingNttSystemVerilog.packedControlWidth(schedule)
           )
-          val coreTop = if useSwitchTranspose then s"${top}Core" else top
+          val useAxi=config.interfaceKind==InterfaceKind.Axi4Stream
+          val coreTop = if useSwitchTranspose || useAxi then s"${top}Core" else top
           val coreRtl = PeStreamingNttSystemVerilog.emit(schedule, config.streamingWidth, coreTop, config.profile, reductionKind, config.protocol, config.runtimeControl)
           Files.writeString(output,
             if useSwitchTranspose then GenericSwitchTransposeWrapper.emit(coreRtl, top, coreTop, config.streamingWidth, config.domain.modulus.bitWidth)
+            else if useAxi then Axi4StreamWrapper.emit(coreRtl,top,coreTop,config.streamingWidth,config.domain.modulus.bitWidth,metrics.inputCycles)
             else coreRtl)
           val controlPorts = config.protocol match
             case StreamProtocol.NextPulse => Vector(Port("next", PortDirection.Input, ValueFormat.Valid), Port("ready", PortDirection.Output, ValueFormat.Valid), Port("next_out", PortDirection.Output, ValueFormat.Valid))
@@ -407,6 +419,12 @@ object Main:
           println(s"root=${domain.root}")
           println(s"psi=${domain.twist.get}")
           println(s"reduction=${PrimeAnalyzer.analyze(domain.modulus).recommendedMultiplier}")
+        case Command.PrimeReducer(modulus,fused,outputName,topName) =>
+          val output=Path.of(outputName.getOrElse(if fused then "fused-butterfly.sv" else "prime-reducer.sv"))
+          Option(output.getParent).foreach(Files.createDirectories(_))
+          val top=topName.getOrElse(if fused then "NGenFusedTwiddleButterfly" else "NGenPrimeReducer")
+          Files.writeString(output,if fused then FusedTwiddleButterflySystemVerilog.emit(modulus,top) else PrimeReductionSystemVerilog.emit(modulus,top))
+          println(s"Written specialized arithmetic in $output.")
         case Command.SwitchTranspose(logSize, dataWidth, outputName, topName) =>
           val output = Path.of(outputName.getOrElse("switch-transpose.sv"))
           Option(output.getParent).foreach(Files.createDirectories(_))

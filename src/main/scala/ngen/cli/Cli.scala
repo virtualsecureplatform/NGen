@@ -1,7 +1,7 @@
 package ngen.cli
 
 import ngen.algebra.{Domains, Modulus, NttDomain, TransformShape}
-import ngen.rtl.{ArchitectureKind, PresetBackend, ProfileName, ReductionChoice, StreamProtocol, TransposeKind}
+import ngen.rtl.{ArchitectureKind, InterfaceKind, PresetBackend, ProfileName, ReductionChoice, StreamProtocol, TransposeKind}
 import ngen.transform.{DataOrder, GeneralNttAlgorithm, GeneralNttDomain, GeneralNttPlan, RnsBasis}
 import ngen.arithmetic.{FermatField, GeneralizedFermatField}
 
@@ -27,6 +27,7 @@ final case class GeneratorConfig(
     inputOrder: DataOrder,
     outputOrder: DataOrder,
     protocol: StreamProtocol,
+    interfaceKind: InterfaceKind,
     runtimeControl: Boolean,
     graph: Boolean,
     rtlGraph: Boolean
@@ -47,6 +48,7 @@ enum Command:
   case GeneralNtt(plan: GeneralNttPlan, output: Option[String], top: Option[String])
   case PrimeInfo(modulus: Modulus)
   case PrimeGenerate(transformLog: Int, bitWidth: Int)
+  case PrimeReducer(modulus: Modulus, fusedButterfly: Boolean, output: Option[String], top: Option[String])
   case Presets
   case Version
   case Help
@@ -91,6 +93,7 @@ object Cli:
       |  -input-order <o> Input stream order: natural (default) or bitreversed.
       |  -output-order <o> Output stream order: natural (default) or bitreversed.
       |  -protocol <p>   Stream control: next (default) or ready-valid.
+      |  -interface <i>  External interface: raw (default) or axi4stream.
       |  -runtime-field  Expose runtime modulus/reduction-constant ports on butterflypipeline.
       |  -runtime-control Expose writable packed PE operation/twiddle records.
       |  -graph          Emit the transform-decomposition DOT graph.
@@ -109,6 +112,8 @@ object Cli:
       |  generalntt      Generate a staged mixed-radix, four-step, or Bluestein transform.
       |  primeinfo       Classify -q and report hardware reduction properties.
       |  primegen        Find a negacyclic NTT prime using -n and -data-width.
+      |  primereducer    Emit a specialized Proth or sparse-prime reducer.
+      |  fusedbutterfly  Emit a DSP-tiled specialized twiddle butterfly.
       |  presets         List built-in field/domain presets.
       |  version         Print the NGen version.
       |
@@ -161,6 +166,7 @@ object Cli:
     var inputOrder = DataOrder.Natural
     var outputOrder = DataOrder.Natural
     var protocol = StreamProtocol.NextPulse
+    var interfaceKind = InterfaceKind.Raw
     var runtimeField = false
     var runtimeControl = false
     var useFourStep = false
@@ -202,6 +208,7 @@ object Cli:
         case "-input-order" => inputOrder = DataOrder.parse(requiredValue(args, "-input-order"))
         case "-output-order" => outputOrder = DataOrder.parse(requiredValue(args, "-output-order"))
         case "-protocol" => protocol = StreamProtocol.parse(requiredValue(args, "-protocol"))
+        case "-interface" => interfaceKind = InterfaceKind.parse(requiredValue(args,"-interface"))
         case "-runtime-field" => runtimeField = true
         case "-runtime-control" => runtimeControl = true
         case "-graph" => graph = true
@@ -209,7 +216,7 @@ object Cli:
         case "-check" => check = true
         case "-nologo" => ()
         case "-h" | "--help" | "help" => terminal = Some("help")
-        case value @ ("ntt" | "intt" | "raintt" | "kyberpe" | "switchtranspose" | "butterflypipeline" | "rnspolymul" | "generalntt" | "primeinfo" | "primegen" | "presets" | "version") =>
+        case value @ ("ntt" | "intt" | "raintt" | "kyberpe" | "switchtranspose" | "butterflypipeline" | "rnspolymul" | "generalntt" | "primeinfo" | "primegen" | "primereducer" | "fusedbutterfly" | "presets" | "version") =>
           require(terminal.isEmpty, s"multiple transforms specified: ${terminal.get} and $value")
           terminal = Some(value)
         case unknown => throw new IllegalArgumentException(s"unknown argument: $unknown")
@@ -224,6 +231,9 @@ object Cli:
       case Some("primegen") =>
         require(preset.isEmpty && q.isEmpty && root.isEmpty && psi.isEmpty, "primegen uses -n and -data-width")
         Command.PrimeGenerate(n.getOrElse(throw new IllegalArgumentException("primegen requires -n")),dataWidth)
+      case Some(value @ ("primereducer"|"fusedbutterfly")) =>
+        require(preset.isEmpty&&n.isEmpty&&root.isEmpty&&psi.isEmpty,s"$value uses -q, -o, and -top")
+        Command.PrimeReducer(Modulus(q.getOrElse(throw new IllegalArgumentException(s"$value requires -q"))),value=="fusedbutterfly",output,top)
       case Some("switchtranspose") =>
         require(preset.isEmpty && q.isEmpty && root.isEmpty && psi.isEmpty && baseCase.isEmpty && peCount.isEmpty, "switchtranspose uses -n and -data-width, not transform architecture options")
         val logSize = n.getOrElse(throw new IllegalArgumentException("switchtranspose requires -n"))
@@ -332,7 +342,8 @@ object Cli:
             transpose,
             inputOrder,
             outputOrder,
-            protocol,
+            if interfaceKind==InterfaceKind.Axi4Stream then StreamProtocol.ReadyValid else protocol,
+            interfaceKind,
             runtimeControl,
             graph,
             rtlGraph

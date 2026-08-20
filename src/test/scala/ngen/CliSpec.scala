@@ -3,7 +3,7 @@ package ngen
 import ngen.algebra.TransformShape
 import ngen.cli.{Cli, Command, Direction}
 import ngen.transform.GeneralNttAlgorithm
-import ngen.rtl.{ProfileName, ReductionChoice, StreamProtocol, TransposeKind}
+import ngen.rtl.{InterfaceKind, ProfileName, ReductionChoice, StreamProtocol, TransposeKind}
 import org.scalatest.funsuite.AnyFunSuite
 
 class CliSpec extends AnyFunSuite:
@@ -13,6 +13,13 @@ class CliSpec extends AnyFunSuite:
     Cli.parse(Seq("-n","1","-fermat-base","10","-fermat-index","1","ntt")) match
       case Command.Generate(config)=>assert(config.domain.modulus.q==101)
       case other=>fail(s"expected generalized Fermat generation, got $other")
+
+  test("AXI4-Stream selects ready-valid while raw remains the default"):
+    Cli.parse(Seq("-n","3","-k","1","-q","17","-root","9","-interface","axi4stream","ntt")) match
+      case Command.Generate(config)=>
+        assert(config.interfaceKind==InterfaceKind.Axi4Stream)
+        assert(config.protocol==StreamProtocol.ReadyValid)
+      case other=>fail(s"expected AXI generation, got $other")
   test("SGen-style preset options precede the transform"):
     val command = Cli.parse(Seq("-preset", "yata512", "-k", "6", "-r", "3", "-check", "ntt"))
     val config = command match

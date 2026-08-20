@@ -133,6 +133,28 @@ generation to a requested dynamic range. Generalized Fermat fields now accept
 non-power-of-two bases; those use Shoup lowering when digit-shift hardware is
 not applicable.
 
+Specialized arithmetic RTL can be emitted directly. Proth reducers use their
+power-of-two radix and a bounded correction network; pseudo-Mersenne, Solinas,
+and Goldilocks reducers use unrolled signed folding. The fused form explicitly
+tiles multiplication into 27x18 DSP partial products before reduction and the
+radix-2 butterfly:
+
+```bash
+./ngen.bat -q 40960001 -o proth-reducer.sv primereducer
+./ngen.bat -q 40960001 -o fused-butterfly.sv fusedbutterfly
+```
+
+Recursive arithmetic planning tracks redundant ranges and inserts correction
+points only when the configured storage width would overflow. Generated design
+metadata reports DSP tile count, partial-product adder depth, and the number of
+lazy correction points.
+
+For custom streaming transforms, `-interface axi4stream` wraps the ready/valid
+core in a packed AXI4-Stream interface with `TDATA`, `TVALID`, `TREADY`, and
+transaction `TLAST`. It also checks incoming `TLAST` boundaries. AXI4-Lite and
+other bus wrappers are intentionally not supported. Without this option, NGen
+emits the original raw interface and no AXI-related logic.
+
 Radix-2 PEs use a three-stage tagged arithmetic pipeline for Barrett,
 Montgomery, or Shoup multiplication. The same pipeline can be emitted as a
 standalone one-operation-per-cycle component with:
