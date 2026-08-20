@@ -25,6 +25,7 @@ SWITCH_TRANSPOSE_TASKS = {
     "small_yata8x8_raintt_p27",
     "yata_raintt_512_p27",
     "hoge_streaming_intt_1024_p64",
+    "hoge_streaming_ntt_1024_p64",
 }
 
 
@@ -40,11 +41,11 @@ def main() -> int:
     parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--profile", choices=("baseline", "f300"), default="baseline")
     parser.add_argument("--preset-backend", choices=("auto", "microcoded", "stage-parallel"), default="auto")
-    parser.add_argument("--transpose", choices=("indexed", "switch"), default="indexed")
+    parser.add_argument("--transpose", choices=("indexed", "switch", "distributed"), default="indexed")
     parser.add_argument("--with-yosys", action="store_true")
     parser.add_argument("--ngen", type=Path, default=ROOT / "ngen.bat")
     args = parser.parse_args()
-    if args.transpose == "switch" and args.task not in SWITCH_TRANSPOSE_TASKS:
+    if args.transpose in ("switch", "distributed") and args.task not in SWITCH_TRANSPOSE_TASKS:
         parser.error(f"task {args.task} does not expose a switch-transpose boundary")
 
     llm_root = args.llm_ntt_root.resolve()

@@ -1,6 +1,7 @@
 package ngen
 
 import ngen.backend.HogePipelinedSystemVerilog
+import ngen.backend.HogeSystemVerilog
 import ngen.rtl.{ProfileName, TransposeKind}
 import org.scalatest.funsuite.AnyFunSuite
 
@@ -17,3 +18,9 @@ class HogePipelinedSystemVerilogSpec extends AnyFunSuite:
 
   test("stage-parallel HOGE keeps the unsupported boundary mode explicit"):
     assertThrows[IllegalArgumentException](HogePipelinedSystemVerilog.emit("HogePipe", inverse = true, ProfileName.Baseline, TransposeKind.Switch))
+
+  test("streaming HOGE supports forward boundary and distributed transpose modes"):
+    val boundary = HogeSystemVerilog.emitStreamingNtt("HogeForwardSwitch", ProfileName.Baseline, TransposeKind.Switch)
+    val distributed = HogeSystemVerilog.emitStreamingNtt("HogeForwardDistributed", ProfileName.Baseline, TransposeKind.Distributed)
+    assert(boundary.contains("HogeInputNGenSwitchTransposeNetwork_5"))
+    assert(distributed.contains("HogeDistributedSwitchTranspose_64"))

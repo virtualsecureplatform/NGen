@@ -140,10 +140,12 @@ YATA inverse input/forward output, HOGE inverse input, and square custom
 streams where `K` equals the number of stream cycles. Custom input and output
 address plans are transformed with the physical networks, preserving natural
 external order.
+`-transpose distributed` is a HOGE forward-only mode. It decomposes the 32×32
+transpose into four independently buffered 16×16 switch networks, reducing the
+largest routing region at the cost of additional buffering and latency.
 YATA supports switch transpose in both directions. HOGE currently supports it
-for `intt`; forward HOGE requires switches interleaved with the recursive
-HomGate butterfly pipeline and is rejected instead of silently changing the
-architecture.
+for `intt` and `ntt`; the forward boundary switch uses corrected stream
+indexing, while `distributed` provides the P&R-oriented decomposition.
 The standalone primitive/network can be emitted with:
 
 ```bash

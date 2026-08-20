@@ -102,7 +102,7 @@ def main() -> int:
     parser.add_argument("--run", action="store_true", help="generate and evaluate candidates before comparing")
     parser.add_argument("--with-yosys", action="store_true")
     parser.add_argument("--preset-backend", choices=("auto", "microcoded", "stage-parallel"), default="auto")
-    parser.add_argument("--transpose", choices=("indexed", "switch"), default="indexed")
+    parser.add_argument("--transpose", choices=("indexed", "switch", "distributed"), default="indexed")
     args = parser.parse_args()
     tasks = args.task or list(TASKS)
     reference_dir = args.reference_root.resolve() / "baselines" / "extracted-rtl"

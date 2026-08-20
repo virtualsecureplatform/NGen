@@ -164,8 +164,10 @@ object HogeSystemVerilog:
     val size = 1024
     val lanes = 32
     val cycles = 32
-    val useSwitch = transpose == TransposeKind.Switch && inverse
-    require(transpose == TransposeKind.Indexed || inverse, "HOGE forward switch transpose requires the future HomGate pipeline backend")
+    val useSwitch = transpose != TransposeKind.Indexed
+    val distributedSwitch = transpose == TransposeKind.Distributed
+    require(transpose == TransposeKind.Indexed || useSwitch, "unsupported HOGE transpose mode")
+    require(!distributedSwitch || !inverse, "distributed HOGE transpose is currently a forward-path architecture")
     val moduleName = if useSwitch then s"${top}Core" else top
     val groups = MicroProgram.schedule(if inverse then inverseProgram(10,5) else forwardProgram(10,5), lanes).bundles
     require(groups.size < 3990, s"HOGE program exceeds watchdog: ${groups.size} bundles")
@@ -188,7 +190,10 @@ object HogeSystemVerilog:
     val laneInstances = Vector.tabulate(lanes)(i => s"HogeMicroLane lane_$i(lane_kind_$i,lane_a_$i,lane_b_$i,lane_constant_$i,lane_out_a_$i,lane_out_b_$i);")
     def inputCases: String = (0 until cycles).map { cycle =>
       val assignments = Vector.tabulate(lanes) { lane =>
-        val index = if inverse && !useSwitch then lane * cycles + cycle else cycle * lanes + lane
+        val index =
+          if inverse then (if useSwitch then cycle * lanes + lane else lane * cycles + cycle)
+          else if useSwitch then lane * cycles + cycle
+          else cycle * lanes + lane
         s"input$index=io_in[$lane*$inputWidth+:$inputWidth];"
       }
       s"$cycle: begin\n${lines(assignments,10)}\n        end"
@@ -250,20 +255,104 @@ object HogeSystemVerilog:
        |/* verilator lint_on UNUSEDSIGNAL */
        |/* verilator lint_on BLKSEQ */
        |""".stripMargin
-    if useSwitch then core + "\n" + hogeSwitchWrapper(top,moduleName) else core
+    if useSwitch then core + "\n" + hogeSwitchWrapper(top,moduleName,inverse,distributedSwitch) else core
 
-  private def hogeSwitchWrapper(top: String, coreName: String): String =
-    val spec = SwitchTransposeSpec(5,32)
-    val inputs = Vector.tabulate(32)(lane => s"assign switch_in[${lane*32}+:32]=io_in[${lane*32}+:32];")
-    val coreInputs = Vector.tabulate(32)(lane => s"wire [31:0] core_in_$lane; assign core_in_$lane=switch_out[${lane*32}+:32];")
-    val packedCoreInput = Vector.tabulate(32)(lane => s"assign core_packed_in[${lane*32}+:32]=core_in_$lane;")
-    s"""${SwitchTransposeSystemVerilog.definitions(spec)}
-       |module $top(input clock,input reset,input io_enable,output io_validout,input [1023:0] io_in,output [2047:0] io_out);
-       |  wire [1023:0] switch_in,switch_out,core_packed_in; wire switch_valid;
-       |  ${inputs.mkString("\n  ")}
-       |  ${coreInputs.mkString("\n  ")}
-       |  ${packedCoreInput.mkString("\n  ")}
-       |  NGenSwitchTransposeNetwork_5 transpose(clock,reset,io_enable,switch_in,switch_valid,switch_out);
-       |  $coreName core(clock,reset,switch_valid,io_validout,core_packed_in,io_out);
+  private def hogeSwitchWrapper(top: String, coreName: String, inverse: Boolean, distributed: Boolean): String =
+    val lanes = 32
+    val inputWidth = if inverse then 32 else 64
+    val outputWidth = 64
+    val inputBits = lanes * inputWidth
+    val outputBits = lanes * outputWidth
+    val inputSpec = SwitchTransposeSpec(5,inputWidth)
+    val inputAssignments = Vector.tabulate(lanes)(lane => s"assign switch_in[${lane * inputWidth}+:$inputWidth]=io_in[${lane * inputWidth}+:$inputWidth];")
+    val readyPort = if inverse then "" else "output io_ready,"
+    val readyWire = if inverse then "" else "assign io_ready=io_enable&&!core_valid;"
+    val readyDeclaration = if inverse then "" else "wire core_ready;"
+    val coreReady = if inverse then "" else ".io_ready(core_ready),"
+    val inputDefinitions = if distributed then distributedSwitchTranspose(inputWidth) else SwitchTransposeSystemVerilog.definitions(inputSpec,"HogeInput")
+    val outputDefinitions = ""
+    val outputStage = "  assign io_validout=core_valid; assign io_out=core_packed_out;"
+    val inputStage =
+      if distributed then s"  HogeDistributedSwitchTranspose_$inputWidth input_transpose(clock,reset,io_enable,switch_in,switch_valid,input_transposed); assign core_packed_in=input_transposed;"
+      else "  HogeInputNGenSwitchTransposeNetwork_5 input_transpose(clock,reset,io_enable,switch_in,switch_valid,input_transposed); assign core_packed_in=input_transposed;"
+    s"""$inputDefinitions
+       |$outputDefinitions
+       |module $top(
+       |  input clock,input reset,input io_enable,$readyPort
+       |  output io_validout,input [$inputBits-1:0] io_in,output [$outputBits-1:0] io_out
+       |);
+       |  wire [$inputBits-1:0] switch_in,input_transposed,core_packed_in;
+       |  wire [$outputBits-1:0] core_packed_out;
+       |  wire switch_valid,core_valid;
+       |  ${inputAssignments.mkString("\n  ")}
+       |  $readyDeclaration
+       |  $readyWire
+       |$inputStage
+       |  $coreName core(.clock(clock),.reset(reset),.io_enable(switch_valid),${coreReady}.io_validout(core_valid),.io_in(core_packed_in),.io_out(core_packed_out));
+       |$outputStage
+       |endmodule
+       |""".stripMargin
+
+  private def distributedSwitchTranspose(dataWidth: Int): String =
+    require(dataWidth > 0)
+    val half = 16
+    val lanes = 32
+    val fullBits = lanes * dataWidth
+    val halfBits = half * dataWidth
+    val prefixes = Vector("HogeDistA", "HogeDistB", "HogeDistC", "HogeDistD")
+    val names = Vector("a", "b", "c", "d")
+    val definitions = prefixes.map(prefix => SwitchTransposeSystemVerilog.definitions(SwitchTransposeSpec(4, dataWidth), prefix)).mkString("\n")
+    val inputSlices = Vector.tabulate(half)(lane => s"assign a_in[${lane * dataWidth}+:$dataWidth]=data_in[${lane * dataWidth}+:$dataWidth];") ++
+      Vector.tabulate(half)(lane => s"assign b_in[${lane * dataWidth}+:$dataWidth]=data_in[${(lane + half) * dataWidth}+:$dataWidth];")
+    val bufferDeclarations = names.map(name => s"reg [$dataWidth-1:0] ${name}_buffer [0:15][0:15];").mkString("\n  ")
+    val capture = names.map { name =>
+      Vector.tabulate(half)(lane => s"${name}_buffer[${name}_count][$lane] <= ${name}_out[${lane * dataWidth}+:$dataWidth];").mkString(" ")
+    }
+    val resetBuffers = names.flatMap(name => for row <- 0 until half; lane <- 0 until half yield s"${name}_buffer[$row][$lane] <= '0;").mkString(" ")
+    val outputAssignments = Vector.tabulate(lanes) { lane =>
+      val source = if lane < half then "a" else "c"
+      val localLane = if lane < half then lane else lane - half
+      s"data_out[${lane * dataWidth}+:$dataWidth]=${source}_buffer[output_row][$localLane];"
+    }
+    val outputAssignmentsSecond = Vector.tabulate(lanes) { lane =>
+      val source = if lane < half then "b" else "d"
+      val localLane = if lane < half then lane else lane - half
+      s"data_out[${lane * dataWidth}+:$dataWidth]=${source}_buffer[output_row][$localLane];"
+    }
+    s"""$definitions
+       |module HogeDistributedSwitchTranspose_$dataWidth(
+       |  input clock,input reset,input valid_in,input [$fullBits-1:0] data_in,
+       |  output valid_out,output reg [$fullBits-1:0] data_out
+       |);
+       |  wire [$halfBits-1:0] a_in,b_in,c_in,d_in,a_out,b_out,c_out,d_out;
+       |  wire a_valid,b_valid,c_valid,d_valid;
+       |  reg [5:0] input_count; reg input_done; reg [3:0] a_count,b_count,c_count,d_count; reg emit_active; reg [5:0] output_count; reg [3:0] output_row;
+       |  ${inputSlices.mkString("\n  ")}
+       |  assign c_in=a_in; assign d_in=b_in;
+       |  HogeDistANGenSwitchTransposeNetwork_4 a_switch(clock,reset,valid_in&&!input_done&&!emit_active&&(input_count<16),a_in,a_valid,a_out);
+       |  HogeDistBNGenSwitchTransposeNetwork_4 b_switch(clock,reset,valid_in&&!input_done&&!emit_active&&(input_count<16),b_in,b_valid,b_out);
+       |  HogeDistCNGenSwitchTransposeNetwork_4 c_switch(clock,reset,valid_in&&!input_done&&!emit_active&&(input_count>=16),c_in,c_valid,c_out);
+       |  HogeDistDNGenSwitchTransposeNetwork_4 d_switch(clock,reset,valid_in&&!input_done&&!emit_active&&(input_count>=16),d_in,d_valid,d_out);
+       |$bufferDeclarations
+       |  assign valid_out=emit_active;
+       |  always @(*) begin
+       |    data_out='0; output_row=(output_count<16)?output_count[3:0]:(output_count-16);
+       |    if(emit_active) begin
+       |      if(output_count<16) begin ${outputAssignments.mkString(" ")} end
+       |      else begin ${outputAssignmentsSecond.mkString(" ")} end
+       |    end
+       |  end
+       |  always @(posedge clock) begin
+       |    if(reset) begin input_count<=0;input_done<=0;a_count<=0;b_count<=0;c_count<=0;d_count<=0;emit_active<=0;output_count<=0;$resetBuffers end
+       |    else begin
+       |      if(!valid_in&&!emit_active) begin input_count<=0;input_done<=0;end
+       |      else if(valid_in&&!input_done&&!emit_active) begin if(input_count==31) input_done<=1; else input_count<=input_count+1; end
+       |      if(a_valid) begin ${capture(0)} if(a_count==15)a_count<=0;else a_count<=a_count+1; end
+       |      if(b_valid) begin ${capture(1)} if(b_count==15)b_count<=0;else b_count<=b_count+1; end
+       |      if(c_valid) begin ${capture(2)} if(c_count==15)c_count<=0;else c_count<=c_count+1; end
+       |      if(d_valid) begin ${capture(3)} if(d_count==15)d_count<=0;else d_count<=d_count+1; if(d_count==15)begin emit_active<=1;output_count<=0;end end
+       |      else if(emit_active) begin if(output_count==31)begin emit_active<=0;output_count<=0;end else output_count<=output_count+1; end
+       |    end
+       |  end
        |endmodule
        |""".stripMargin

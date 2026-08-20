@@ -3,7 +3,10 @@ package ngen.backend
 import ngen.rtl.SwitchTransposeSpec
 
 object SwitchTransposeSystemVerilog:
-  private def unit(bits: Int, dataWidth: Int): String =
+  private def unitName(prefix: String, bits: Int): String = s"${prefix}NGenSwitchTransposeUnit_$bits"
+  private def networkName(prefix: String, bits: Int): String = s"${prefix}NGenSwitchTransposeNetwork_$bits"
+
+  private def unit(bits: Int, dataWidth: Int, prefix: String = ""): String =
     val width = 1 << bits
     val half = width / 2
     def upper(lane: Int, stage: Int) = s"upper_${lane}_$stage"
@@ -39,7 +42,7 @@ object SwitchTransposeSystemVerilog:
            |        2'd2: begin count <= count + 1'b1; if (count == ${half - 1}) begin select <= ~select; count <= 0; if ((~select) && (~valid_in)) begin valid_out <= 1'b0; select <= 1'b0; state <= 2'd0; end end end
            |        default: begin state <= 2'd0; valid_out <= 1'b0; select <= 1'b0; count <= 0; end
            |      endcase""".stripMargin
-    s"""module NGenSwitchTransposeUnit_$bits(
+    s"""module ${unitName(prefix, bits)}(
        |  input clock, input reset, input valid_in,
        |  input [${width * dataWidth - 1}:0] data_in,
        |  output valid_out, output [${width * dataWidth - 1}:0] data_out
@@ -59,27 +62,28 @@ object SwitchTransposeSystemVerilog:
        |endmodule
        |""".stripMargin.replace("valid_out <=", "valid_reg <=")
 
-  private def network(bits: Int, dataWidth: Int): String =
+  private def network(bits: Int, dataWidth: Int, prefix: String = ""): String =
     val width = 1 << bits
     if bits == 1 then
-      s"""module NGenSwitchTransposeNetwork_1(input clock,input reset,input valid_in,input [${2 * dataWidth - 1}:0] data_in,output valid_out,output [${2 * dataWidth - 1}:0] data_out);
-         |  NGenSwitchTransposeUnit_1 unit(clock,reset,valid_in,data_in,valid_out,data_out);
+      s"""module ${networkName(prefix, 1)}(input clock,input reset,input valid_in,input [${2 * dataWidth - 1}:0] data_in,output valid_out,output [${2 * dataWidth - 1}:0] data_out);
+         |  ${unitName(prefix, 1)} unit(clock,reset,valid_in,data_in,valid_out,data_out);
          |endmodule
          |""".stripMargin
 
     else
       val halfBits = width * dataWidth / 2
-      s"""module NGenSwitchTransposeNetwork_$bits(input clock,input reset,input valid_in,input [${width * dataWidth - 1}:0] data_in,output valid_out,output [${width * dataWidth - 1}:0] data_out);
+      s"""module ${networkName(prefix, bits)}(input clock,input reset,input valid_in,input [${width * dataWidth - 1}:0] data_in,output valid_out,output [${width * dataWidth - 1}:0] data_out);
          |  wire unit_valid; wire [${width * dataWidth - 1}:0] unit_data; wire lower_valid, upper_valid;
-         |  NGenSwitchTransposeUnit_$bits unit(clock,reset,valid_in,data_in,unit_valid,unit_data);
-         |  NGenSwitchTransposeNetwork_${bits-1} lower(clock,reset,unit_valid,unit_data[0 +: $halfBits],lower_valid,data_out[0 +: $halfBits]);
-         |  NGenSwitchTransposeNetwork_${bits-1} upper(clock,reset,unit_valid,unit_data[$halfBits +: $halfBits],upper_valid,data_out[$halfBits +: $halfBits]);
+         |  ${unitName(prefix, bits)} unit(clock,reset,valid_in,data_in,unit_valid,unit_data);
+         |  ${networkName(prefix, bits - 1)} lower(clock,reset,unit_valid,unit_data[0 +: $halfBits],lower_valid,data_out[0 +: $halfBits]);
+         |  ${networkName(prefix, bits - 1)} upper(clock,reset,unit_valid,unit_data[$halfBits +: $halfBits],upper_valid,data_out[$halfBits +: $halfBits]);
          |  assign valid_out = lower_valid;
          |endmodule
          |""".stripMargin
 
-  def definitions(spec: SwitchTransposeSpec): String =
-    (1 to spec.logSize).map(bits => unit(bits,spec.dataWidth) + network(bits,spec.dataWidth)).mkString("\n")
+  def definitions(spec: SwitchTransposeSpec, prefix: String = ""): String =
+    require(prefix.matches("[A-Za-z_][A-Za-z0-9_]*") || prefix.isEmpty, s"invalid switch-transpose prefix '$prefix'")
+    (1 to spec.logSize).map(bits => unit(bits,spec.dataWidth,prefix) + network(bits,spec.dataWidth,prefix)).mkString("\n")
 
   def emit(spec: SwitchTransposeSpec, top: String = "SwitchTransposeTop"): String =
     require(top.matches("[A-Za-z_][A-Za-z0-9_$]*"), s"invalid module name: $top")

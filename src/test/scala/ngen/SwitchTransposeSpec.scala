@@ -20,3 +20,8 @@ class SwitchTransposeSpecTest extends AnyFunSuite:
     assert(rtl.contains("module NGenSwitchTransposeUnit_3"))
     assert(rtl.contains("module NGenSwitchTransposeNetwork_2"))
     assert(rtl.contains("module Transpose8"))
+
+  test("switch definitions can be namespaced for distributed partitions"):
+    val rtl = SwitchTransposeSystemVerilog.definitions(SwitchTransposeSpec(2, 32), "PartitionA")
+    assert(rtl.contains("module PartitionANGenSwitchTransposeUnit_2"))
+    assert(rtl.contains("module PartitionANGenSwitchTransposeNetwork_1"))

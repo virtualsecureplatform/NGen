@@ -60,13 +60,14 @@ object PresetBackend:
     case other => throw new IllegalArgumentException(s"unknown preset backend '$other'; expected auto, microcoded, or stage-parallel")
 
 enum TransposeKind:
-  case Indexed, Switch
+  case Indexed, Switch, Distributed
 
 object TransposeKind:
   def parse(value: String): TransposeKind = value.toLowerCase match
     case "indexed" => TransposeKind.Indexed
     case "switch" => TransposeKind.Switch
-    case other => throw new IllegalArgumentException(s"unknown transpose '$other'; expected indexed or switch")
+    case "distributed" | "distributed-switch" => TransposeKind.Distributed
+    case other => throw new IllegalArgumentException(s"unknown transpose '$other'; expected indexed, switch, or distributed")
 
 enum StreamProtocol:
   case NextPulse, ReadyValid

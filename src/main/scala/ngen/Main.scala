@@ -113,6 +113,7 @@ object Main:
         println(s"Written design in $output.")
         return true
       require(Set("yata8", "yata64", "yata512")(config.domain.name), "raintt requires a YATA preset")
+      require(config.transpose != ngen.rtl.TransposeKind.Distributed, "distributed transpose is currently a HOGE forward architecture")
       require(config.radixLog == 3, "yata8 RAINTT requires -r 3")
       val expectedStreamingLog = if config.domain.name == "yata512" then 6 else 3
       require(config.streamingLog == expectedStreamingLog, s"${config.domain.name} requires -k $expectedStreamingLog")
@@ -174,12 +175,18 @@ object Main:
           val stageCount = if inverse then inverseStages else forwardStages
           stageCount + math.max(0, stageCount - 1) * (if config.profile == ProfileName.F300 then 1 else 0)
         else HogeSystemVerilog.streamingBundles(inverse, config.profile)
-      val switchOverhead = if inverse && config.transpose == ngen.rtl.TransposeKind.Switch then 31 else 0
+      val switchOverhead = config.transpose match
+        case ngen.rtl.TransposeKind.Indexed => 0
+        case ngen.rtl.TransposeKind.Switch => 31
+        case ngen.rtl.TransposeKind.Distributed => 47
       writePresetArtifacts(config, output, "Goldilocks", 32, 32, bundles + 2 + switchOverhead, bundles,
-        Some(if usePipelined then "hoge-stage-parallel-radix32" else "hoge-streamed-radix32"))
+        Some(if usePipelined then "hoge-stage-parallel-radix32"
+        else if config.transpose == ngen.rtl.TransposeKind.Distributed then "hoge-distributed-transpose-radix32"
+        else "hoge-streamed-radix32"))
       println(s"Written design in $output.")
       true
     else if genericDomain then
+      require(config.transpose != ngen.rtl.TransposeKind.Distributed, "distributed transpose is currently a HOGE forward architecture")
       val profile = PipelineProfile.named(config.profile)
       val inverse = config.direction == Direction.Inverse
       val output = Path.of(config.output.getOrElse("design.sv"))

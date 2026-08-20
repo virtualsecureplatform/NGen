@@ -85,7 +85,7 @@ object Cli:
       |  -architecture <a> RTL architecture: auto (default), fully-parallel, streamed, or stage-parallel.
       |  -preset-backend <b> Preset lowering: auto, microcoded, or stage-parallel.
       |  -reduction <r>  Modular reduction: auto (default), barrett, montgomery, or shoup.
-      |  -transpose <t>  Streaming transpose: indexed (default) or switch.
+      |  -transpose <t>  Streaming transpose: indexed (default), switch, or distributed.
       |  -input-order <o> Input stream order: natural (default) or bitreversed.
       |  -output-order <o> Output stream order: natural (default) or bitreversed.
       |  -protocol <p>   Stream control: next (default) or ready-valid.
