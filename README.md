@@ -138,6 +138,13 @@ The standalone primitive/network can be emitted with:
 ./ngen.bat -n 3 -data-width 32 -o transpose8.sv switchtranspose
 ```
 
+Built-in YATA/HOGE presets select a conservative backend in `auto` mode:
+small YATA designs use the stage-parallel lowering, while the large 512/1024
+point presets retain the compact microcoded reference until target-specific
+memory and arithmetic modules are selected.  The experimental lowering can be
+requested explicitly with `-preset-backend stage-parallel`; use
+`-preset-backend microcoded` to reproduce the original schedule.
+
 Every generation writes `<output-stem>.json`. `-graph` writes the transform
 decomposition and `-rtlgraph` writes the scheduled architecture graph.
 
@@ -213,6 +220,22 @@ CRT reconstruction outputs.
   characterized preset, including a standalone HOGE forward-NTT oracle.
 - The evaluator's `--with-yosys --yosys-candidate-only` path records flattened
   structural statistics for self-contained generated designs.
+
+Preset throughput comparisons use the same transaction definition as the
+reference manifests (input burst + maximum wait + output burst):
+
+```bash
+python3 scripts/benchmark_presets.py \
+  --task small_yata8x8_raintt_p27 \
+  --task hoge_streaming_intt_1024_p64 \
+  --run --with-yosys
+```
+
+Pass `--preset-backend stage-parallel` to benchmark the experimental lowering
+explicitly; `auto` is the default policy.
+
+The resulting `comparison.json` keeps latency and Yosys resource counters
+separate; Vivado/PPA numbers still require the target toolchain and constraints.
 
 NGen is GPL-3.0 licensed. Generated designs do not copy checked-in reference
 RTL; constants and schedules are derived from the declared transform domains.

@@ -4,8 +4,10 @@ import ngen.algebra.Domains
 import ngen.cli.{Cli, Command, Direction, GeneratorConfig}
 import ngen.transform.ReferenceNtt
 import ngen.backend.YataMicrocodedSystemVerilog
+import ngen.backend.YataPipelinedSystemVerilog
 import ngen.backend.{DesignMetadata, GraphSystemVerilog, TransformDot}
 import ngen.backend.HogeSystemVerilog
+import ngen.backend.HogePipelinedSystemVerilog
 import ngen.backend.KyberSystemVerilog
 import ngen.backend.SwitchTransposeSystemVerilog
 import ngen.backend.PeStreamingNttSystemVerilog
@@ -14,7 +16,7 @@ import ngen.backend.PipelinedButterflySystemVerilog
 import ngen.backend.RnsPolynomialMultiplierSystemVerilog
 import ngen.rtl.GeneralNttGraph
 import ngen.rtl.SwitchTransposeSpec
-import ngen.rtl.{Architecture, ArchitectureKind, GenericNttGraph, PeNttSchedule, PipelineProfile, Port, PortDirection, ReductionChoice, ReductionKind, StreamProtocol, StreamingContract, ValueFormat}
+import ngen.rtl.{Architecture, ArchitectureKind, GenericNttGraph, PeNttSchedule, PipelineProfile, PresetBackend, ProfileName, Port, PortDirection, ReductionChoice, ReductionKind, StreamProtocol, StreamingContract, ValueFormat}
 import ngen.transform.{DataOrder, IncompleteNttPlan, NttPlan, StreamingNttPlan, SwitchBoundaryPlan}
 
 import java.nio.file.{Files, Path}
@@ -29,16 +31,17 @@ object Main:
       inputCycles: Int,
       outputCycles: Int,
       latency: Int,
-      initiationInterval: Int
+      initiationInterval: Int,
+      architectureOverride: Option[String] = None
   ): Unit =
     val direction = config.direction.toString.toLowerCase
     val profile = config.profile.toString.toLowerCase
-    val architecture = config.domain.name match
+    val architecture = architectureOverride.getOrElse(config.domain.name match
       case name if name.startsWith("yata") => "yata-microcoded-radix8"
       case "hoge32" => "hoge-radix32"
       case "hoge1024" => "hoge-streamed-radix32"
       case "kyber256" => "kyber-pe1"
-      case _ => config.architecture.toString.toLowerCase
+      case _ => config.architecture.toString.toLowerCase)
     val base = artifactBase(output)
     val json = s"""{
       |  "schema": "ngen-design-v1",
@@ -91,6 +94,7 @@ object Main:
 
   private def emit(config: GeneratorConfig): Boolean =
     val genericDomain = config.domain.name == "custom" || config.domain.name.startsWith("fermat") || config.domain.name.startsWith("generalized-fermat")
+    if genericDomain then require(config.presetBackend == PresetBackend.Auto, "-preset-backend is only valid with a built-in preset")
     if !genericDomain then
       require(config.architecture == ArchitectureKind.Auto, "preset backends select their architecture automatically")
       require(config.reduction == ReductionChoice.Auto, "preset backends select their field reduction automatically")
@@ -99,6 +103,7 @@ object Main:
         "preset backends currently expose natural-order streams only")
     if config.direction == Direction.Both then
       if config.domain.name == "kyber256" then
+        require(config.presetBackend != PresetBackend.StageParallel, "stage-parallel preset backend is not implemented for Kyber PE1")
         require(config.streamingLog == 0 && config.radixLog == 1, "kyberpe requires -k 0 -r 1")
         val output = Path.of(config.output.getOrElse("KyberHPM1PE.v"))
         Option(output.getParent).foreach(Files.createDirectories(_))
@@ -117,17 +122,31 @@ object Main:
         case "yata64" => "SmallYata8x8RainttP27Rtl"
         case _ => "YataRainttTop"
       val top = config.top.getOrElse(defaultTop)
-      Files.writeString(output, YataMicrocodedSystemVerilog.emit(config.domain.logSize, config.streamingLog, config.profile, top, config.transpose))
+      val usePipelined = config.transpose == ngen.rtl.TransposeKind.Indexed && (config.presetBackend match
+        case PresetBackend.StageParallel => true
+        case PresetBackend.Microcoded => false
+        case PresetBackend.Auto => config.domain.size <= 64)
+      val rtl =
+        if usePipelined then YataPipelinedSystemVerilog.emit(config.domain.logSize, config.streamingLog, config.profile, top, config.transpose)
+        else YataMicrocodedSystemVerilog.emit(config.domain.logSize, config.streamingLog, config.profile, top, config.transpose)
+      Files.writeString(output, rtl)
       val cycles = config.domain.size / config.streamingWidth
-      val schedule = YataMicrocodedSystemVerilog.scheduleLengths(config.domain.logSize, config.streamingLog, config.profile)
+      val schedule =
+        if usePipelined then
+          val (inverseStages, forwardStages) = YataPipelinedSystemVerilog.stageCounts(config.domain.logSize)
+          val gap = if config.profile == ProfileName.F300 then 1 else 0
+          (inverseStages + math.max(0, inverseStages - 1) * gap, forwardStages + math.max(0, forwardStages - 1) * gap)
+        else YataMicrocodedSystemVerilog.scheduleLengths(config.domain.logSize, config.streamingLog, config.profile)
       val switchOverhead =
         if config.transpose != ngen.rtl.TransposeKind.Switch || cycles == 1 then 0
         else if config.streamingWidth == cycles then cycles - 1
         else 2 * cycles - 1
-      writePresetArtifacts(config, output, "YataSredc", cycles, cycles, schedule._1.max(schedule._2) + 2 + switchOverhead, schedule._1.max(schedule._2))
+      writePresetArtifacts(config, output, "YataSredc", cycles, cycles, schedule._1.max(schedule._2) + 2 + switchOverhead, schedule._1.max(schedule._2),
+        Some(if usePipelined then "yata-stage-parallel-radix8" else "yata-microcoded-radix8"))
       println(s"Written design in $output.")
       true
     else if config.domain.name == "hoge32" then
+      require(config.presetBackend != PresetBackend.StageParallel, "stage-parallel preset backend requires hoge1024")
       require(config.transpose == ngen.rtl.TransposeKind.Indexed, "hoge32 has no streaming transpose boundary")
       require(config.streamingLog == 5 && config.radixLog == 5, "hoge32 requires -k 5 -r 5")
       val output = Path.of(config.output.getOrElse("design.sv"))
@@ -142,11 +161,21 @@ object Main:
       Option(output.getParent).foreach(Files.createDirectories(_))
       val inverse = config.direction == Direction.Inverse
       val top = config.top.getOrElse(if inverse then "INTTWrap" else "NTTWrap")
-      val rtl = if inverse then HogeSystemVerilog.emitStreamingIntt(top, config.profile, config.transpose) else HogeSystemVerilog.emitStreamingNtt(top, config.profile, config.transpose)
+      val usePipelined = config.transpose == ngen.rtl.TransposeKind.Indexed && config.presetBackend == PresetBackend.StageParallel
+      val rtl =
+        if usePipelined then HogePipelinedSystemVerilog.emit(top, inverse, config.profile, config.transpose)
+        else if inverse then HogeSystemVerilog.emitStreamingIntt(top, config.profile, config.transpose)
+        else HogeSystemVerilog.emitStreamingNtt(top, config.profile, config.transpose)
       Files.writeString(output, rtl)
-      val bundles = HogeSystemVerilog.streamingBundles(inverse, config.profile)
+      val bundles =
+        if usePipelined then
+          val (inverseStages, forwardStages) = HogePipelinedSystemVerilog.stageCounts(10, 5)
+          val stageCount = if inverse then inverseStages else forwardStages
+          stageCount + math.max(0, stageCount - 1) * (if config.profile == ProfileName.F300 then 1 else 0)
+        else HogeSystemVerilog.streamingBundles(inverse, config.profile)
       val switchOverhead = if inverse && config.transpose == ngen.rtl.TransposeKind.Switch then 31 else 0
-      writePresetArtifacts(config, output, "Goldilocks", 32, 32, bundles + 2 + switchOverhead, bundles)
+      writePresetArtifacts(config, output, "Goldilocks", 32, 32, bundles + 2 + switchOverhead, bundles,
+        Some(if usePipelined then "hoge-stage-parallel-radix32" else "hoge-streamed-radix32"))
       println(s"Written design in $output.")
       true
     else if genericDomain then

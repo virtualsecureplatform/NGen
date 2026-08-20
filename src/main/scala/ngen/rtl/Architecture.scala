@@ -48,6 +48,16 @@ object ArchitectureKind:
     case "streamed" | "streaming" => ArchitectureKind.Streamed
     case other => throw new IllegalArgumentException(s"unknown architecture '$other'; expected auto, fully-parallel, or streamed")
 
+enum PresetBackend:
+  case Auto, Microcoded, StageParallel
+
+object PresetBackend:
+  def parse(value: String): PresetBackend = value.toLowerCase.replace("-", "") match
+    case "auto" => PresetBackend.Auto
+    case "microcoded" | "microcode" => PresetBackend.Microcoded
+    case "stageparallel" | "pipeline" | "pipelined" => PresetBackend.StageParallel
+    case other => throw new IllegalArgumentException(s"unknown preset backend '$other'; expected auto, microcoded, or stage-parallel")
+
 enum TransposeKind:
   case Indexed, Switch
 

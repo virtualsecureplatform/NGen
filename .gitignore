@@ -7,3 +7,4 @@ ngen.bat
 project/project/
 project/target/
 *.class
+__pycache__/

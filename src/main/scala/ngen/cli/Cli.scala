@@ -1,7 +1,7 @@
 package ngen.cli
 
 import ngen.algebra.{Domains, Modulus, NttDomain, TransformShape}
-import ngen.rtl.{ArchitectureKind, ProfileName, ReductionChoice, StreamProtocol, TransposeKind}
+import ngen.rtl.{ArchitectureKind, PresetBackend, ProfileName, ReductionChoice, StreamProtocol, TransposeKind}
 import ngen.transform.{DataOrder, GeneralNttAlgorithm, GeneralNttDomain, GeneralNttPlan, RnsBasis}
 import ngen.arithmetic.{FermatField, GeneralizedFermatField}
 
@@ -21,6 +21,7 @@ final case class GeneratorConfig(
     top: Option[String],
     profile: ProfileName,
     architecture: ArchitectureKind,
+    presetBackend: PresetBackend,
     reduction: ReductionChoice,
     transpose: TransposeKind,
     inputOrder: DataOrder,
@@ -82,6 +83,7 @@ object Cli:
       |  -data-width <w> Element width for switchtranspose; defaults to 64.
       |  -profile <name> Pipeline profile: baseline (default) or f300.
       |  -architecture <a> RTL architecture: auto (default), fully-parallel, or streamed.
+      |  -preset-backend <b> Preset lowering: auto, microcoded, or stage-parallel.
       |  -reduction <r>  Modular reduction: auto (default), barrett, montgomery, or shoup.
       |  -transpose <t>  Streaming transpose: indexed (default) or switch.
       |  -input-order <o> Input stream order: natural (default) or bitreversed.
@@ -149,6 +151,7 @@ object Cli:
     var dataWidth = 64
     var profile = ProfileName.Baseline
     var architecture = ArchitectureKind.Auto
+    var presetBackend = PresetBackend.Auto
     var reduction = ReductionChoice.Auto
     var transpose = TransposeKind.Indexed
     var inputOrder = DataOrder.Natural
@@ -187,6 +190,7 @@ object Cli:
         case "-data-width" => dataWidth = requiredValue(args, "-data-width").toInt
         case "-profile" => profile = ProfileName.parse(requiredValue(args, "-profile"))
         case "-architecture" => architecture = ArchitectureKind.parse(requiredValue(args, "-architecture"))
+        case "-preset-backend" => presetBackend = PresetBackend.parse(requiredValue(args, "-preset-backend"))
         case "-reduction" => reduction = ReductionChoice.parse(requiredValue(args, "-reduction"))
         case "-transpose" => transpose = TransposeKind.parse(requiredValue(args, "-transpose"))
         case "-four-step" => useFourStep = true
@@ -313,6 +317,7 @@ object Cli:
             top,
             profile,
             architecture,
+            presetBackend,
             reduction,
             transpose,
             inputOrder,

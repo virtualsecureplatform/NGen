@@ -56,6 +56,12 @@ class CliSpec extends AnyFunSuite:
     assert(config.transpose == TransposeKind.Switch)
     assert(config.graph && config.rtlGraph)
 
+  test("preset backend selects the stage-parallel lowering"):
+    val command = Cli.parse(Seq("-preset", "yata64", "-k", "3", "-r", "3", "-preset-backend", "stage-parallel", "raintt"))
+    command match
+      case Command.Generate(config) => assert(config.presetBackend == ngen.rtl.PresetBackend.StageParallel)
+      case other => fail(s"expected generation command, got $other")
+
   test("switch transpose has an SGen-style terminal command"):
     val command = Cli.parse(Seq("-n", "3", "-data-width", "16", "-o", "transpose.sv", "switchtranspose"))
     assert(command == Command.SwitchTranspose(3, 16, Some("transpose.sv"), None))

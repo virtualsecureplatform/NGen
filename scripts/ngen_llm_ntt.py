@@ -39,6 +39,7 @@ def main() -> int:
     parser.add_argument("--llm-ntt-root", type=Path, default=ROOT.parent / "LLM-NTT-Examples")
     parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--profile", choices=("baseline", "f300"), default="baseline")
+    parser.add_argument("--preset-backend", choices=("auto", "microcoded", "stage-parallel"), default="auto")
     parser.add_argument("--transpose", choices=("indexed", "switch"), default="indexed")
     parser.add_argument("--with-yosys", action="store_true")
     parser.add_argument("--ngen", type=Path, default=ROOT / "ngen.bat")
@@ -54,7 +55,8 @@ def main() -> int:
     base, filename = TASKS[args.task]
     output = candidate_dir / filename
 
-    generation_args = base[:-1] + ["-profile", args.profile, "-transpose", args.transpose, "-o", str(output), base[-1]]
+    generation_args = base[:-1] + ["-profile", args.profile, "-preset-backend", args.preset_backend,
+                                    "-transpose", args.transpose, "-o", str(output), base[-1]]
     if args.ngen.exists():
         run(["bash", str(args.ngen), *generation_args], ROOT)
     else:
@@ -71,6 +73,7 @@ def main() -> int:
     summary = {
         "task": args.task,
         "profile": args.profile,
+        "preset_backend": args.preset_backend,
         "transpose": args.transpose,
         "candidate": str(output),
         "results": str(result_path),
