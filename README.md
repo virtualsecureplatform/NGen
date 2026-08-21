@@ -238,6 +238,10 @@ than input bandwidth, so `input_ready` eventually applies the unavoidable
 backpressure; no finite buffer can sustain an unbounded input sequence at that
 rate.
 
+Pass `-fixed-rate` to omit `input_ready` and use a static schedule instead.
+The required interval is emitted as `FRAME_INTERVAL`; for the 4×8 example it
+is eight cycles, i.e. four capture cycles followed by a four-cycle frame gap.
+
 Built-in YATA/HOGE presets select a conservative backend in `auto` mode:
 YATA uses the stage-parallel lowering, while the large HOGE 1024-point preset
 retains the compact microcoded reference until target-specific memory and

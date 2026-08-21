@@ -36,6 +36,11 @@ class SwitchTransposeSpecTest extends AnyFunSuite:
     assert(rtl.contains("output input_ready"))
     assert(rtl.contains("storage_0") && rtl.contains("storage_1"))
 
+  test("fixed-rate rectangular adapter removes ready and documents its frame interval"):
+    val rtl=SwitchTransposeSystemVerilog.emit(SwitchTransposeSpec(2,3,16),"Fixed4x8",fixedRate=true)
+    assert(!rtl.contains("output input_ready"))
+    assert(rtl.contains("FRAME_INTERVAL=8,MIN_FRAME_GAP=4"))
+
   test("switch definitions can be namespaced for distributed partitions"):
     val rtl = SwitchTransposeSystemVerilog.definitions(SwitchTransposeSpec(2, 32), "PartitionA")
     assert(rtl.contains("module PartitionANGenSwitchTransposeUnit_2"))
