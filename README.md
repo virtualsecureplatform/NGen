@@ -247,6 +247,10 @@ interval. The adapter packs or splits the flattened transposed rows, uses the
 same number of input and output beats, and can sustain consecutive frames with
 its two tensor buffers.
 
+```bash
+./ngen.bat -n 4 -k 5 -rate-preserving -data-width 64 switchtranspose
+```
+
 Built-in YATA/HOGE presets select a conservative backend in `auto` mode:
 YATA uses the stage-parallel lowering, while the large HOGE 1024-point preset
 retains the compact microcoded reference until target-specific memory and
