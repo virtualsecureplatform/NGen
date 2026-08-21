@@ -435,10 +435,10 @@ object Main:
           val top=topName.getOrElse(if fused then "NGenFusedTwiddleButterfly" else "NGenPrimeReducer")
           Files.writeString(output,if fused then FusedTwiddleButterflySystemVerilog.emit(modulus,top,dspDecompose) else PrimeReductionSystemVerilog.emit(modulus,top))
           println(s"Written specialized arithmetic in $output.")
-        case Command.SwitchTranspose(logSize, dataWidth, outputName, topName) =>
+        case Command.SwitchTranspose(inputCycleLog, inputLaneLog, dataWidth, outputName, topName) =>
           val output = Path.of(outputName.getOrElse("switch-transpose.sv"))
           Option(output.getParent).foreach(Files.createDirectories(_))
-          Files.writeString(output, SwitchTransposeSystemVerilog.emit(SwitchTransposeSpec(logSize, dataWidth), topName.getOrElse("SwitchTransposeTop")))
+          Files.writeString(output, SwitchTransposeSystemVerilog.emit(SwitchTransposeSpec(inputCycleLog,inputLaneLog,dataWidth), topName.getOrElse("SwitchTransposeTop")))
           println(s"Written switch transpose in $output.")
         case Command.ButterflyPipeline(modulus, reduction, runtimeField, outputName, topName) =>
           val output = Path.of(outputName.getOrElse("butterfly-pipeline.sv"))

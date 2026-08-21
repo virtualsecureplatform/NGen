@@ -222,7 +222,14 @@ The standalone primitive/network can be emitted with:
 
 ```bash
 ./ngen.bat -n 3 -data-width 32 -o transpose8.sv switchtranspose
+./ngen.bat -n 2 -k 3 -data-width 32 -o transpose4x8.sv switchtranspose
 ```
+
+The second form is rectangular: it accepts four cycles of eight elements and
+emits eight cycles of four elements. Square shapes retain the recursive switch
+network; rectangular shapes use an explicit width-changing tensor adapter.
+The NTT boundary wrappers still require square streams because their core ports
+have a fixed vector width.
 
 Built-in YATA/HOGE presets select a conservative backend in `auto` mode:
 YATA uses the stage-parallel lowering, while the large HOGE 1024-point preset

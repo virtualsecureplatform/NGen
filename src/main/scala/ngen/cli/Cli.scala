@@ -43,7 +43,7 @@ final case class GeneratorConfig(
 
 enum Command:
   case Generate(config: GeneratorConfig)
-  case SwitchTranspose(logSize: Int, dataWidth: Int, output: Option[String], top: Option[String])
+  case SwitchTranspose(inputCycleLog: Int, inputLaneLog: Int, dataWidth: Int, output: Option[String], top: Option[String])
   case ButterflyPipeline(modulus: Modulus, reduction: ReductionChoice, runtimeField: Boolean, output: Option[String], top: Option[String])
   case RnsPolynomial(basis: RnsBasis, emitCrt: Boolean, output: Option[String], top: Option[String])
   case GeneralNtt(plan: GeneralNttPlan, output: Option[String], top: Option[String])
@@ -86,6 +86,7 @@ object Cli:
       |  -o <file>       Output file; defaults to design.sv for RTL transforms.
       |  -top <name>     Override the generated top-level module name.
       |  -data-width <w> Element width for switchtranspose; defaults to 64.
+      |  -k <k>          For switchtranspose, log2 input lanes; defaults to -n (square).
       |  -profile <name> Pipeline profile: baseline (default) or f300.
       |  -architecture <a> RTL architecture: auto, full-throughput, compact, fully-parallel, streamed, or stage-parallel.
       |  -preset-backend <b> Preset lowering: auto, full-throughput, compact, microcoded, or stage-parallel.
@@ -108,7 +109,7 @@ object Cli:
       |  intt            Inverse NTT.
       |  raintt          Combined YATA forward/inverse benchmark wrapper.
       |  kyberpe         Combined Kyber PE1 forward/inverse wrapper.
-      |  switchtranspose Generate a HOGE-style recursive switch transpose.
+      |  switchtranspose Generate a square or rectangular lane/time switch transpose.
       |  butterflypipeline Generate a tagged three-stage modular butterfly pipeline.
       |  rnspolymul      Generate two NTTs, pointwise multiply, and INTT per RNS prime.
       |  generalntt      Generate a staged mixed-radix, four-step, or Bluestein transform.
@@ -239,11 +240,12 @@ object Cli:
         require(preset.isEmpty&&n.isEmpty&&root.isEmpty&&psi.isEmpty,s"$value uses -q, -o, and -top")
         Command.PrimeReducer(Modulus(q.getOrElse(throw new IllegalArgumentException(s"$value requires -q"))),value=="fusedbutterfly",dspDecompose,output,top)
       case Some("switchtranspose") =>
-        require(preset.isEmpty && q.isEmpty && root.isEmpty && psi.isEmpty && baseCase.isEmpty && peCount.isEmpty, "switchtranspose uses -n and -data-width, not transform architecture options")
-        val logSize = n.getOrElse(throw new IllegalArgumentException("switchtranspose requires -n"))
-        require(logSize > 0 && logSize < 16)
+        require(preset.isEmpty && q.isEmpty && root.isEmpty && psi.isEmpty && baseCase.isEmpty && peCount.isEmpty, "switchtranspose uses -n, optional -k, and -data-width, not transform architecture options")
+        val inputCycleLog = n.getOrElse(throw new IllegalArgumentException("switchtranspose requires -n"))
+        val inputLaneLog = k.getOrElse(inputCycleLog)
+        require(inputCycleLog >= 0 && inputLaneLog >= 0 && inputCycleLog + inputLaneLog > 0 && inputCycleLog < 16 && inputLaneLog < 16)
         require(dataWidth > 0)
-        Command.SwitchTranspose(logSize, dataWidth, output, top)
+        Command.SwitchTranspose(inputCycleLog, inputLaneLog, dataWidth, output, top)
       case Some("butterflypipeline") =>
         require(preset.isEmpty && n.isEmpty && root.isEmpty && psi.isEmpty && baseCase.isEmpty && peCount.isEmpty,
           "butterflypipeline uses -q and -reduction")
