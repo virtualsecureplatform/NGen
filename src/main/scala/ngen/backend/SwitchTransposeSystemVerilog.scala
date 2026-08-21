@@ -96,7 +96,7 @@ object SwitchTransposeSystemVerilog:
     }.mkString(" ")
     val ratePreservingAssignments = (buffer: Int) => Vector.tabulate(externalLanes) { lane =>
       val linear = s"(output_count*${spec.inputLanes}+$lane)"
-      s"data_out[$lane*${spec.dataWidth}+:${spec.dataWidth}]<=storage_$buffer[($linear/${spec.inputCycles})*${spec.inputLanes}+($linear%${spec.inputCycles})];"
+      s"data_out[$lane*${spec.dataWidth}+:${spec.dataWidth}]<=storage_$buffer[($linear%${spec.inputCycles})*${spec.inputLanes}+($linear/${spec.inputCycles})];"
     }.mkString(" ")
     val captureAssignments = (buffer: Int) => Vector.tabulate(spec.inputLanes) { lane =>
       s"storage_$buffer[input_count*${spec.inputLanes}+$lane]<=data_in[$lane*${spec.dataWidth}+:${spec.dataWidth}];"
