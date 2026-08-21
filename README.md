@@ -231,6 +231,13 @@ network; rectangular shapes use an explicit width-changing tensor adapter.
 The NTT boundary wrappers still require square streams because their core ports
 have a fixed vector width.
 
+Rectangular adapters use two tensor buffers and expose `input_ready`. A source
+may start consecutive frames whenever this signal is high. When the transpose
+narrows the vector (`input lanes > input cycles`), output bandwidth is lower
+than input bandwidth, so `input_ready` eventually applies the unavoidable
+backpressure; no finite buffer can sustain an unbounded input sequence at that
+rate.
+
 Built-in YATA/HOGE presets select a conservative backend in `auto` mode:
 YATA uses the stage-parallel lowering, while the large HOGE 1024-point preset
 retains the compact microcoded reference until target-specific memory and

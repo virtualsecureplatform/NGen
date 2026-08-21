@@ -33,6 +33,8 @@ class SwitchTransposeSpecTest extends AnyFunSuite:
     assert(rtl.contains("4x8 -> 8x4"))
     assert(rtl.contains("input [128-1:0] data_in"))
     assert(rtl.contains("output reg [64-1:0] data_out"))
+    assert(rtl.contains("output input_ready"))
+    assert(rtl.contains("storage_0") && rtl.contains("storage_1"))
 
   test("switch definitions can be namespaced for distributed partitions"):
     val rtl = SwitchTransposeSystemVerilog.definitions(SwitchTransposeSpec(2, 32), "PartitionA")
