@@ -242,6 +242,11 @@ Pass `-fixed-rate` to omit `input_ready` and use a static schedule instead.
 The required interval is emitted as `FRAME_INTERVAL`; for the 4×8 example it
 is eight cycles, i.e. four capture cycles followed by a four-cycle frame gap.
 
+Pass `-rate-preserving` to keep the original external lane width and frame
+interval. The adapter packs or splits the flattened transposed rows, uses the
+same number of input and output beats, and can sustain consecutive frames with
+its two tensor buffers.
+
 Built-in YATA/HOGE presets select a conservative backend in `auto` mode:
 YATA uses the stage-parallel lowering, while the large HOGE 1024-point preset
 retains the compact microcoded reference until target-specific memory and

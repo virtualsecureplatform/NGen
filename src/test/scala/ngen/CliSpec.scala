@@ -99,9 +99,10 @@ class CliSpec extends AnyFunSuite:
 
   test("switch transpose has an SGen-style terminal command"):
     val command = Cli.parse(Seq("-n", "3", "-data-width", "16", "-o", "transpose.sv", "switchtranspose"))
-    assert(command == Command.SwitchTranspose(3, 3, 16, false, Some("transpose.sv"), None))
-    assert(Cli.parse(Seq("-n","2","-k","3","switchtranspose")) == Command.SwitchTranspose(2,3,64,false,None,None))
-    assert(Cli.parse(Seq("-n","2","-k","3","-fixed-rate","switchtranspose")) == Command.SwitchTranspose(2,3,64,true,None,None))
+    assert(command == Command.SwitchTranspose(3, 3, 16, false, false, Some("transpose.sv"), None))
+    assert(Cli.parse(Seq("-n","2","-k","3","switchtranspose")) == Command.SwitchTranspose(2,3,64,false,false,None,None))
+    assert(Cli.parse(Seq("-n","2","-k","3","-fixed-rate","switchtranspose")) == Command.SwitchTranspose(2,3,64,true,false,None,None))
+    assert(Cli.parse(Seq("-n","2","-k","3","-rate-preserving","switchtranspose")) == Command.SwitchTranspose(2,3,64,false,true,None,None))
 
   test("custom incomplete domains expose a configurable base case"):
     val command = Cli.parse(Seq("-n", "3", "-k", "1", "-r", "1", "-q", "17", "-root", "9", "-base-case", "2", "ntt"))

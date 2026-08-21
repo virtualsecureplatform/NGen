@@ -43,7 +43,7 @@ final case class GeneratorConfig(
 
 enum Command:
   case Generate(config: GeneratorConfig)
-  case SwitchTranspose(inputCycleLog: Int, inputLaneLog: Int, dataWidth: Int, fixedRate: Boolean, output: Option[String], top: Option[String])
+  case SwitchTranspose(inputCycleLog: Int, inputLaneLog: Int, dataWidth: Int, fixedRate: Boolean, ratePreserving: Boolean, output: Option[String], top: Option[String])
   case ButterflyPipeline(modulus: Modulus, reduction: ReductionChoice, runtimeField: Boolean, output: Option[String], top: Option[String])
   case RnsPolynomial(basis: RnsBasis, emitCrt: Boolean, output: Option[String], top: Option[String])
   case GeneralNtt(plan: GeneralNttPlan, output: Option[String], top: Option[String])
@@ -88,6 +88,7 @@ object Cli:
       |  -data-width <w> Element width for switchtranspose; defaults to 64.
       |  -k <k>          For switchtranspose, log2 input lanes; defaults to -n (square).
       |  -fixed-rate     For rectangular switchtranspose, omit ready and use a fixed frame interval.
+      |  -rate-preserving Keep the rectangular switchtranspose external width and frame rate unchanged.
       |  -profile <name> Pipeline profile: baseline (default) or f300.
       |  -architecture <a> RTL architecture: auto, full-throughput, compact, fully-parallel, streamed, or stage-parallel.
       |  -preset-backend <b> Preset lowering: auto, full-throughput, compact, microcoded, or stage-parallel.
@@ -173,6 +174,7 @@ object Cli:
     var interfaceKind = InterfaceKind.Raw
     var dspDecompose = false
     var fixedRate = false
+    var ratePreserving = false
     var runtimeField = false
     var runtimeControl = false
     var useFourStep = false
@@ -217,6 +219,7 @@ object Cli:
         case "-interface" => interfaceKind = InterfaceKind.parse(requiredValue(args,"-interface"))
         case "-dsp-decompose" => dspDecompose = true
         case "-fixed-rate" => fixedRate = true
+        case "-rate-preserving" => ratePreserving = true
         case "-runtime-field" => runtimeField = true
         case "-runtime-control" => runtimeControl = true
         case "-graph" => graph = true
@@ -248,7 +251,7 @@ object Cli:
         val inputLaneLog = k.getOrElse(inputCycleLog)
         require(inputCycleLog >= 0 && inputLaneLog >= 0 && inputCycleLog + inputLaneLog > 0 && inputCycleLog < 16 && inputLaneLog < 16)
         require(dataWidth > 0)
-        Command.SwitchTranspose(inputCycleLog, inputLaneLog, dataWidth, fixedRate, output, top)
+        Command.SwitchTranspose(inputCycleLog, inputLaneLog, dataWidth, fixedRate, ratePreserving, output, top)
       case Some("butterflypipeline") =>
         require(preset.isEmpty && n.isEmpty && root.isEmpty && psi.isEmpty && baseCase.isEmpty && peCount.isEmpty,
           "butterflypipeline uses -q and -reduction")
