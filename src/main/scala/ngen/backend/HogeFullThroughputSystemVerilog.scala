@@ -15,11 +15,36 @@ object HogeFullThroughputSystemVerilog:
 
   private def hex(value: BigInt): String = f"64'h${HogeField.normalize(value)}%016x"
 
-  private def arithmetic: String =
+  private[ngen] def arithmetic: String =
     """
       |  localparam [63:0] HOGE_P=64'hffffffff00000001;
       |  function automatic [63:0] hoge_add(input [63:0] a,input [63:0] b); reg [64:0] s; begin s={1'b0,a}+{1'b0,b}; hoge_add=(s[64]||s[63:0]>=HOGE_P)?s[63:0]+64'h00000000ffffffff:s[63:0]; end endfunction
       |  function automatic [63:0] hoge_sub(input [63:0] a,input [63:0] b); reg [64:0] d; begin d={1'b0,a}-{1'b0,b}; hoge_sub=d[64]?d[63:0]-64'h00000000ffffffff:d[63:0]; end endfunction
+      |  // 2^96 = -1 modulo the Goldilocks prime. Constant shift amounts
+      |  // specialize to wires and carry arithmetic without general multipliers.
+      |  function automatic [63:0] hoge_shift(input [63:0] a,input integer exponent);
+      |    integer amount; reg [63:0] lo,hi,upper,res; reg [31:0] low; reg [64:0] wide;
+      |    begin
+      |      amount=exponent%96;
+      |      if(amount<32) begin
+      |        lo=a<<amount; hi=a>>(64-amount);
+      |        wide={1'b0,lo}+(({1'b0,hi}<<32)-hi);
+      |        res=wide[64]?wide[63:0]+64'hffffffff:wide[63:0];
+      |      end else if(amount<64) begin
+      |        low=a<<(amount-32); lo={low,32'd0};
+      |        hi=(a>>(64-amount))&64'hffffffff; upper=a>>(96-amount);
+      |        res=lo+(hi<<32)-upper-hi;
+      |        if(hi==0 && res>lo) res=res-64'hffffffff;
+      |        else if(hi!=0 && res<lo) res=res+64'hffffffff;
+      |      end else begin
+      |        low=a<<(amount-64); lo={low,32'd0}-low;
+      |        wide={1'b0,lo}-(a>>(96-amount));
+      |        res=wide[64]?wide[63:0]-64'hffffffff:wide[63:0];
+      |      end
+      |      if(res>=HOGE_P) res=res+64'hffffffff;
+      |      hoge_shift=(exponent%192>=96)?hoge_sub(64'd0,res):res;
+      |    end
+      |  endfunction
       |  function automatic [63:0] hoge_mul(input [63:0] a,input [63:0] b); reg [127:0] p; reg [31:0] t0,t1,t2,t3; reg [63:0] lo,middle,res; begin p=a*b;lo=p[63:0];t0=p[31:0];t1=p[63:32];t2=p[95:64];t3=p[127:96];middle={32'd0,t1}+t2;res=(middle<<32)+t0-t3-t2;if((res>lo)&&(t2==0))res=res-64'h00000000ffffffff;if((res<lo)&&(t2!=0))res=res+64'h00000000ffffffff;hoge_mul=(res>=HOGE_P)?res+64'h00000000ffffffff:res; end endfunction
       |""".stripMargin
 
@@ -32,11 +57,9 @@ object HogeFullThroughputSystemVerilog:
         (0 until half).flatMap { index =>
           val left = offset + index
           val right = left + half
-          val factor =
-            if depth == 1 then BigInt(1)
-            else BigInt(2).modPow(3 * (64 - (index << (6 - depth))), HogeField.Modulus)
+          val exponent = if depth == 1 then 0 else 3 * (64 - (index << (6 - depth)))
           Vector(
-            s"twiddled_$depth[$right]=hoge_mul($source[$right],${hex(factor)});",
+            s"twiddled_$depth[$right]=hoge_shift($source[$right],${exponent % 192});",
             s"level_${depth}_next[$left]=hoge_add($source[$left],twiddled_$depth[$right]);",
             s"level_${depth}_next[$right]=hoge_sub($source[$left],twiddled_$depth[$right]);"
           )
@@ -73,19 +96,19 @@ object HogeFullThroughputSystemVerilog:
           val left = offset + index
           val right = left + half
           if former && stage == 0 then
-            val pre = BigInt(2).modPow(48, HogeField.Modulus)
-            val upper = BigInt(2).modPow(3 * index, HogeField.Modulus)
-            val lower = BigInt(2).modPow(9 * index, HogeField.Modulus)
+            val pre = 48
+            val upper = 3 * index
+            val lower = 9 * index
             Vector(
-              s"twiddled_$destination[$right]=hoge_mul($source[$right],${hex(pre)});",
-              s"level_${destination}_next[$left]=hoge_mul(hoge_add($source[$left],twiddled_$destination[$right]),${hex(upper)});",
-              s"level_${destination}_next[$right]=hoge_mul(hoge_sub($source[$left],twiddled_$destination[$right]),${hex(lower)});"
+              s"twiddled_$destination[$right]=hoge_shift($source[$right],$pre);",
+              s"level_${destination}_next[$left]=hoge_shift(hoge_add($source[$left],twiddled_$destination[$right]),$upper);",
+              s"level_${destination}_next[$right]=hoge_shift(hoge_sub($source[$left],twiddled_$destination[$right]),$lower);"
             )
           else
-            val factor = BigInt(2).modPow(3 * (index << (6 - depth)), HogeField.Modulus)
+            val exponent = 3 * (index << (6 - depth))
             Vector(
               s"level_${destination}_next[$left]=hoge_add($source[$left],$source[$right]);",
-              s"level_${destination}_next[$right]=hoge_mul(hoge_sub($source[$left],$source[$right]),${hex(factor)});"
+              s"level_${destination}_next[$right]=hoge_shift(hoge_sub($source[$left],$source[$right]),$exponent);"
             )
         }
       }.mkString(" ")
