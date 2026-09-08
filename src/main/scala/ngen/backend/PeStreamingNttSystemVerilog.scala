@@ -180,7 +180,7 @@ object PeStreamingNttSystemVerilog:
               else if write then s"${portName(buffer,bank,"write_enable")}=1;${portName(buffer,bank,"write_address")}=$rowExpression;${portName(buffer,bank,"write_data")}=i$lane;"
               else s"${portName(buffer,bank,"read_enable")}=1;${portName(buffer,bank,"read_address")}=$rowExpression;"
             s"$bank:begin if($bufferSelector)begin ${action(1)} end else begin ${action(0)} end end"
-          }.mkString
+          }.mkString(" ")
           s"case($bankExpression)$cases default:begin end endcase"
       }
       if lanes.forall(_.nonEmpty) then Some(lanes.flatten.mkString("\n")) else None
