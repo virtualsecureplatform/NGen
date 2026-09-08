@@ -79,3 +79,21 @@ class PeStreamingNttSystemVerilogSpec extends AnyFunSuite:
     assert(!rtl.contains("control_0=control_0_rom[bundle_index]"))
     val programmable = PeStreamingNttSystemVerilog.emit(schedule, 4, "WritableControl", ProfileName.Baseline, ReductionKind.Montgomery, runtimeControl = true)
     assert(programmable.contains("rom_style = \"distributed\""))
+
+  test("large radix-2 schedules register decoded memory issue and account for each stage drain"):
+    val large = NttDomain("q12289", 1024, Modulus(12289), 10302, TransformShape.Cyclic)
+    val schedule = PeNttSchedule.build(NttPlan.radix2(large, inverse = false), 1, 2, 4)
+    val rtl = PeStreamingNttSystemVerilog.emit(schedule, 4, "RegisteredIssue", ProfileName.Baseline, ReductionKind.Montgomery)
+    assert(PeStreamingNttSystemVerilog.registeredIssue(schedule))
+    assert(rtl.contains("issued_valid<=read_issue_valid;"))
+    assert(rtl.contains("issued_control_0<=read_control_0;"))
+    assert(rtl.contains("issue_buffer_0_bank_0_read_enable<=0;"))
+    val timing = PeStreamingNttSystemVerilog.metrics(schedule, 4, ProfileName.Baseline, ReductionKind.Montgomery)
+    assert(timing.executionCycles == 2661)
+    assert(timing.latency == 2920)
+    assert(timing.initiationInterval == 3175)
+
+    val directory = java.nio.file.Files.createTempDirectory("ngen-registered-issue").toFile
+    java.nio.file.Files.writeString(directory.toPath.resolve("dut.sv"), rtl)
+    import scala.sys.process.*
+    assert(Process(Seq("iverilog", "-g2012", "-s", "RegisteredIssue", "-t", "null", "dut.sv"), directory).! == 0)

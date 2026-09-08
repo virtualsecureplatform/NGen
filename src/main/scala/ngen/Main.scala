@@ -401,10 +401,16 @@ object Main:
           val controlPorts = config.protocol match
             case StreamProtocol.NextPulse => Vector(Port("next", PortDirection.Input, ValueFormat.Valid), Port("ready", PortDirection.Output, ValueFormat.Valid), Port("next_out", PortDirection.Output, ValueFormat.Valid))
             case StreamProtocol.ReadyValid => Vector(Port("in_valid", PortDirection.Input, ValueFormat.Valid), Port("in_ready", PortDirection.Output, ValueFormat.Valid), Port("out_valid", PortDirection.Output, ValueFormat.Valid), Port("out_ready", PortDirection.Input, ValueFormat.Valid))
-          val partitionMetrics = if config.stageGroups > 1 then
+          val partitionSchedules = if config.stageGroups > 1 then
             ngen.backend.PartitionedNttSystemVerilog.partitions(basePlan.asInstanceOf[NttPlan],config.stageGroups).map(part =>
-              PeStreamingNttSystemVerilog.metrics(PeNttSchedule.build(part,1,requestedPeCount,config.streamingWidth),config.streamingWidth,config.profile,peReductionKind))
-          else Vector(metrics)
+              PeNttSchedule.build(part,1,requestedPeCount,config.streamingWidth))
+          else Vector(schedule)
+          val partitionMetrics = partitionSchedules.map(part =>
+            PeStreamingNttSystemVerilog.metrics(part,config.streamingWidth,config.profile,peReductionKind))
+          architectureParameters ++= Map(
+            "registered_memory_issue_groups" -> partitionSchedules.count(PeStreamingNttSystemVerilog.registeredIssue),
+            "block_control_rom_groups" -> partitionSchedules.count(part => PeStreamingNttSystemVerilog.usesBlockControl(part,config.runtimeControl))
+          )
           Architecture(
             s"custom-${if inverse then "intt" else "ntt"}-${if config.stageGroups > 1 then s"partitioned-${config.stageGroups}-" else ""}banked-pe-radix${config.radix}",
             Vector(Port("clock", PortDirection.Input, ValueFormat.Valid), Port("reset", PortDirection.Input, ValueFormat.Valid)) ++ controlPorts,
