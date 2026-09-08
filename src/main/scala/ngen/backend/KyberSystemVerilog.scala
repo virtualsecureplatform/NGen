@@ -66,23 +66,23 @@ object KyberSystemVerilog:
     val inverseRom = inverse.zipWithIndex.map { case (op, index) =>
       s"i_kind[$index]=2'd${op.kind}; i_left[$index]=8'd${op.left}; i_right[$index]=8'd${op.right}; i_constant[$index]=12'd${montgomeryConstant(op.constant)};"
     }
-    def memoryName(buffer: Int, bank: Int): String = s"coefficient_${buffer}_$bank"
-    val compactDeclarations = (for buffer <- 0 until 3; bank <- 0 until 2 yield
-      s"(* ram_style = \"block\" *) reg [11:0] ${memoryName(buffer,bank)}[0:127];reg ${memoryName(buffer,bank)}_ae,${memoryName(buffer,bank)}_be,${memoryName(buffer,bank)}_bw;reg [6:0] ${memoryName(buffer,bank)}_aa,${memoryName(buffer,bank)}_ba;reg [11:0] ${memoryName(buffer,bank)}_bd,${memoryName(buffer,bank)}_aq,${memoryName(buffer,bank)}_bq;"
+    def memoryName(buffer: Int, bank: Int): String = s"coefficient_$bank"
+    val compactDeclarations = (for buffer <- 0 until 1; bank <- 0 until 2 yield
+      s"(* ram_style = \"block\" *) reg [11:0] ${memoryName(buffer,bank)}[0:383];reg ${memoryName(buffer,bank)}_ae,${memoryName(buffer,bank)}_be,${memoryName(buffer,bank)}_bw;reg [8:0] ${memoryName(buffer,bank)}_aa,${memoryName(buffer,bank)}_ba;reg [11:0] ${memoryName(buffer,bank)}_bd,${memoryName(buffer,bank)}_aq,${memoryName(buffer,bank)}_bq;"
     ).mkString("\n")
-    val memoryAlways = (for buffer <- 0 until 3; bank <- 0 until 2 yield
+    val memoryAlways = (for buffer <- 0 until 1; bank <- 0 until 2 yield
       s"always @(posedge clk)begin if(${memoryName(buffer,bank)}_ae)${memoryName(buffer,bank)}_aq<=${memoryName(buffer,bank)}[${memoryName(buffer,bank)}_aa];if(${memoryName(buffer,bank)}_be)begin if(${memoryName(buffer,bank)}_bw)${memoryName(buffer,bank)}[${memoryName(buffer,bank)}_ba]<=${memoryName(buffer,bank)}_bd;${memoryName(buffer,bank)}_bq<=${memoryName(buffer,bank)}[${memoryName(buffer,bank)}_ba];end end"
     ).mkString("\n")
     def readMux(port: String, selector: String, bank: String): String =
-      (0 until 3).map(buffer => s"($selector==2'd$buffer)?($bank?${memoryName(buffer,1)}_${port}q:${memoryName(buffer,0)}_${port}q):").mkString+"12'd0"
-    val memoryDefaults = (for buffer <- 0 until 3; bank <- 0 until 2 yield
+      s"($bank?${memoryName(0,1)}_${port}q:${memoryName(0,0)}_${port}q)"
+    val memoryDefaults = (for buffer <- 0 until 1; bank <- 0 until 2 yield
       s"${memoryName(buffer,bank)}_ae=0;${memoryName(buffer,bank)}_be=0;${memoryName(buffer,bank)}_bw=0;${memoryName(buffer,bank)}_aa=0;${memoryName(buffer,bank)}_ba=0;${memoryName(buffer,bank)}_bd=0;"
     ).mkString
     val memoryRouting = (for buffer <- 0 until 3; bank <- 0 until 2 yield
-      s"""if(pipe_valid[0] && source_pointer==2'd$buffer)begin ${memoryName(buffer,bank)}_ae=1;${memoryName(buffer,bank)}_aa=(^pipe_left[0][7:1])==1'b$bank ? {pipe_left[0][7:2],pipe_left[0][0]}:{pipe_right[0][7:2],pipe_right[0][0]};end
-         |if(executing && pipe_valid[6] && work_pointer==2'd$buffer)begin ${memoryName(buffer,bank)}_be=1;${memoryName(buffer,bank)}_bw=1;${memoryName(buffer,bank)}_ba=(^pipe_left[6][7:1])==1'b$bank ? {pipe_left[6][7:2],pipe_left[6][0]}:{pipe_right[6][7:2],pipe_right[6][0]};${memoryName(buffer,bank)}_bd=(^pipe_left[6][7:1])==1'b$bank ? write_left:write_right;end
-         |if(host_load && load_pointer==2'd$buffer && (^load_address[7:1])==1'b$bank)begin ${memoryName(buffer,bank)}_be=1;${memoryName(buffer,bank)}_bw=1;${memoryName(buffer,bank)}_ba={load_address[7:2],load_address[0]};${memoryName(buffer,bank)}_bd=din;end
-         |if(host_prefetch && prefetch_pointer==2'd$buffer && (^prefetch_address[7:1])==1'b$bank)begin ${memoryName(buffer,bank)}_be=1;${memoryName(buffer,bank)}_bw=0;${memoryName(buffer,bank)}_ba={prefetch_address[7:2],prefetch_address[0]};end""".stripMargin
+      s"""if(pipe_valid[0] && source_pointer==2'd$buffer)begin ${memoryName(buffer,bank)}_ae=1;${memoryName(buffer,bank)}_aa=(^pipe_left[0][7:1])==1'b$bank ? {2'd$buffer,pipe_left[0][7:2],pipe_left[0][0]}:{2'd$buffer,pipe_right[0][7:2],pipe_right[0][0]};end
+         |if(executing && pipe_valid[6] && work_pointer==2'd$buffer)begin ${memoryName(buffer,bank)}_be=1;${memoryName(buffer,bank)}_bw=1;${memoryName(buffer,bank)}_ba=(^pipe_left[6][7:1])==1'b$bank ? {2'd$buffer,pipe_left[6][7:2],pipe_left[6][0]}:{2'd$buffer,pipe_right[6][7:2],pipe_right[6][0]};${memoryName(buffer,bank)}_bd=(^pipe_left[6][7:1])==1'b$bank ? write_left:write_right;end
+         |if(host_load && load_pointer==2'd$buffer && (^load_address[7:1])==1'b$bank)begin ${memoryName(buffer,bank)}_be=1;${memoryName(buffer,bank)}_bw=1;${memoryName(buffer,bank)}_ba={2'd$buffer,load_address[7:2],load_address[0]};${memoryName(buffer,bank)}_bd=din;end
+         |if(host_prefetch && prefetch_pointer==2'd$buffer && (^prefetch_address[7:1])==1'b$bank)begin ${memoryName(buffer,bank)}_be=1;${memoryName(buffer,bank)}_bw=0;${memoryName(buffer,bank)}_ba={2'd$buffer,prefetch_address[7:2],prefetch_address[0]};end""".stripMargin
     ).mkString("\n")
     val decodeCases = (0 until 7).map { stage =>
       def body(inverse: Boolean): String =
@@ -123,7 +123,7 @@ object KyberSystemVerilog:
        |$memoryAlways
        |""".stripMargin
     s"""// Generated by NGen from the seven-layer Kyber incomplete NTT plan.
-       |${if banked then "// Compact contract: fully load each bank before use; host load/read transactions do not overlap. RAM contents are unspecified until loaded after reset." else ""}
+       |${if banked then "// Compact contract: fully load each bank before use; host load/read transactions and transform execution do not overlap. RAM contents are unspecified until loaded after reset." else ""}
        |/* verilator lint_off BLKSEQ */
        |/* verilator lint_off UNUSEDSIGNAL */
        |/* verilator lint_off WIDTHEXPAND */
@@ -153,8 +153,8 @@ object KyberSystemVerilog:
        |  ${if banked then "" else s"reg [1:0] f_kind[0:FORWARD_LENGTH-1],i_kind[0:INVERSE_LENGTH-1];reg [7:0] f_left[0:FORWARD_LENGTH-1],f_right[0:FORWARD_LENGTH-1],i_left[0:INVERSE_LENGTH-1],i_right[0:INVERSE_LENGTH-1];reg [11:0] f_constant[0:FORWARD_LENGTH-1],i_constant[0:INVERSE_LENGTH-1];"}
        |  reg load_active, load_inverse, load_bank_b;
        |  reg read_active, read_inverse, read_bank_b, last_inverse, executing, operation_inverse, operation_bank_b, finishing;
-       |  integer load_count, read_count, read_delay, j, logical_index, pc;
-       |  reg issued_all;integer retired_count;
+       |  ${if banked then "reg [7:0] load_count,read_count;reg [1:0] read_delay;reg [9:0] pc,retired_count;integer j,logical_index;" else "integer load_count,read_count,read_delay,j,logical_index,pc,retired_count;"}
+       |  reg issued_all;
        |  reg [6:0] pipe_valid,pipe_inverse;
        |  reg [7:0] pipe_left[0:6],pipe_right[0:6];
        |  reg [11:0] pipe_constant[0:2],pipe_pass[2:6];
