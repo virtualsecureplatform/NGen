@@ -5,8 +5,8 @@ import ngen.transform.KyberNtt
 import ngen.rtl.{IndexedOperation, MicroProgram}
 
 object KyberSystemVerilog:
-  val ForwardCycles = 896
-  val InverseCycles = 896
+  val ForwardCycles = 903
+  val InverseCycles = 903
   private val domain = Domains.Kyber256
   private val zetas = KyberNtt.zetas(domain).map(_.toInt)
   private def montgomeryConstant(value: Int): Int = ((BigInt(value) * (BigInt(1) << 16)) % 3329).toInt
@@ -49,6 +49,17 @@ object KyberSystemVerilog:
     require(top.matches("[A-Za-z_][A-Za-z0-9_$]*"))
     val forward = MicroProgram.schedule(forwardProgram, 1).bundles.flatten
     val inverse = MicroProgram.schedule(inverseProgram, 1).bundles.flatten
+    // Fetch/read/preprocess/product/correction/MAC/reduce, then retirement.
+    // A synchronous read cannot consume a same-edge nonblocking write.
+    for program <- Vector(forward,inverse) do
+      val lastWrite = scala.collection.mutable.Map.empty[Int,Int]
+      program.zipWithIndex.foreach { (operation,index) =>
+        operation.indices.foreach { address =>
+          require(lastWrite.get(address).forall(previous => index-previous >= 8),
+            s"Kyber pipeline RAW distance is too short at instruction $index, address $address")
+        }
+        operation.indices.foreach(address => lastWrite(address)=index)
+      }
     val forwardRom = forward.zipWithIndex.map { case (op, index) =>
       s"f_kind[$index]=2'd${op.kind}; f_left[$index]=8'd${op.left}; f_right[$index]=8'd${op.right}; f_constant[$index]=12'd${montgomeryConstant(op.constant)};"
     }
@@ -89,6 +100,14 @@ object KyberSystemVerilog:
        |  reg load_active, load_inverse, load_bank_b;
        |  reg read_active, read_inverse, read_bank_b, last_inverse, executing, operation_inverse, operation_bank_b, finishing;
        |  integer load_count, read_count, read_delay, j, logical_index, pc;
+       |  reg issued_all;integer retired_count;
+       |  reg [6:0] pipe_valid,pipe_inverse;
+       |  reg [7:0] pipe_left[0:6],pipe_right[0:6];
+       |  reg [11:0] pipe_constant[0:2],pipe_pass[2:6];
+       |  reg [11:0] operand_a,operand_b,multiply_input,reduced_result;
+       |  reg [23:0] product,product_delayed;
+       |  reg [15:0] correction;
+       |  reg [28:0] reduction_sum;
        |
        |  function automatic [11:0] kyber_add(input [11:0] a,input [11:0] b);
        |    reg [12:0] sum; begin sum={1'b0,a}+{1'b0,b}; if(sum>=KYBER_Q) sum=sum-KYBER_Q; kyber_add=sum[11:0]; end
@@ -111,10 +130,23 @@ object KyberSystemVerilog:
        |
        |  always @(posedge clk) begin
        |    if(reset) begin
-       |      dout<=0; done<=0; load_active<=0; read_active<=0; last_inverse<=0; executing<=0; finishing<=0; pc<=0; load_count<=0; read_count<=0; read_delay<=0;
+       |      dout<=0; done<=0; load_active<=0; read_active<=0; last_inverse<=0; executing<=0; finishing<=0; pc<=0; load_count<=0; read_count<=0; read_delay<=0;pipe_valid<=0;issued_all<=0;retired_count<=0;
        |      ${Vector.tabulate(256)(j => s"bank_a[$j]<=0; bank_b[$j]<=0; work[$j]<=0;").mkString("\n")}
        |    end else begin
        |      done<=0;
+       |      pipe_valid<={pipe_valid[5:0],1'b0};
+       |      for(j=1;j<7;j=j+1)begin pipe_left[j]<=pipe_left[j-1];pipe_right[j]<=pipe_right[j-1];pipe_inverse[j]<=pipe_inverse[j-1];end
+       |      for(j=3;j<7;j=j+1)pipe_pass[j]<=pipe_pass[j-1];
+       |      if(pipe_valid[0])begin operand_a<=work[pipe_left[0]];operand_b<=work[pipe_right[0]];pipe_constant[1]<=pipe_constant[0];end
+       |      if(pipe_valid[1])begin
+       |        multiply_input<=pipe_inverse[1]?kyber_sub(operand_b,operand_a):operand_b;
+       |        pipe_pass[2]<=pipe_inverse[1]?kyber_half(kyber_add(operand_a,operand_b)):operand_a;
+       |        pipe_constant[2]<=pipe_constant[1];
+       |      end
+       |      if(pipe_valid[2])product<=multiply_input*pipe_constant[2];
+       |      if(pipe_valid[3])begin correction<=product[15:0]*KYBER_QINV;product_delayed<=product;end
+       |      if(pipe_valid[4])reduction_sum<={5'd0,product_delayed}+correction*KYBER_Q;
+       |      if(pipe_valid[5])reduced_result<=(reduction_sum[28:16]>=KYBER_Q)?reduction_sum[28:16]-KYBER_Q:reduction_sum[28:16];
        |      if(load_a_f||load_a_i||load_b_f||load_b_i) begin load_active<=1; load_count<=0; load_inverse<=load_a_i||load_b_i; load_bank_b<=load_b_f||load_b_i; end
        |      else if(load_active) begin
        |        if(load_inverse) begin case(load_count[1:0]) 2'd0:logical_index=load_count; 2'd1:logical_index=load_count+1; 2'd2:logical_index=load_count-1; default:logical_index=load_count; endcase end else logical_index=load_count;
@@ -123,19 +155,20 @@ object KyberSystemVerilog:
        |      end
        |      if(start_fntt||start_intt) begin
        |        ${Vector.tabulate(256)(j => s"work[$j]<=start_ab?bank_b[$j]:bank_a[$j];").mkString("\n")}
-       |        operation_inverse<=start_intt; operation_bank_b<=start_ab; last_inverse<=start_intt; pc<=0; executing<=1;
+       |        operation_inverse<=start_intt; operation_bank_b<=start_ab; last_inverse<=start_intt; pc<=0; executing<=1;pipe_valid<=0;issued_all<=0;retired_count<=0;
        |      end else if(executing) begin
-       |        if(operation_inverse) begin
-       |          case(i_kind[pc])
-       |            2'd2: begin work[i_left[pc]]<=kyber_half(kyber_add(work[i_left[pc]],work[i_right[pc]])); work[i_right[pc]]<=kyber_mul(kyber_sub(work[i_right[pc]],work[i_left[pc]]),i_constant[pc]); end
-       |            2'd3: work[i_left[pc]]<=kyber_mul(work[i_left[pc]],i_constant[pc]);
-       |            default: begin end
-       |          endcase
-       |          if(pc==INVERSE_LENGTH-1) begin pc<=0; executing<=0; finishing<=1; end else pc<=pc+1;
-       |        end else begin
-       |          work[f_left[pc]]<=kyber_add(work[f_left[pc]],kyber_mul(work[f_right[pc]],f_constant[pc]));
-       |          work[f_right[pc]]<=kyber_sub(work[f_left[pc]],kyber_mul(work[f_right[pc]],f_constant[pc]));
-       |          if(pc==FORWARD_LENGTH-1) begin pc<=0; executing<=0; finishing<=1; end else pc<=pc+1;
+       |        if(!issued_all)begin
+       |          pipe_valid[0]<=1;pipe_inverse[0]<=operation_inverse;
+       |          pipe_left[0]<=operation_inverse?i_left[pc]:f_left[pc];
+       |          pipe_right[0]<=operation_inverse?i_right[pc]:f_right[pc];
+       |          pipe_constant[0]<=operation_inverse?i_constant[pc]:f_constant[pc];
+       |          if(pc==(operation_inverse?INVERSE_LENGTH:FORWARD_LENGTH)-1)begin issued_all<=1;pc<=0;end else pc<=pc+1;
+       |        end
+       |        if(pipe_valid[6])begin
+       |          work[pipe_left[6]]<=pipe_inverse[6]?pipe_pass[6]:kyber_add(pipe_pass[6],reduced_result);
+       |          work[pipe_right[6]]<=pipe_inverse[6]?reduced_result:kyber_sub(pipe_pass[6],reduced_result);
+       |          if(retired_count==(operation_inverse?INVERSE_LENGTH:FORWARD_LENGTH)-1)begin executing<=0;finishing<=1;end
+       |          else retired_count<=retired_count+1;
        |        end
        |      end else if(finishing) begin ${Vector.tabulate(256)(j => s"if(operation_bank_b) bank_b[$j]<=work[$j]; else bank_a[$j]<=work[$j];").mkString("\n")} finishing<=0; done<=1; end
        |      if(read_a||read_b) begin read_active<=1; read_count<=0; read_delay<=2; read_bank_b<=read_b; read_inverse<=last_inverse; end
