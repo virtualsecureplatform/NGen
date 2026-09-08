@@ -138,8 +138,8 @@ object Main:
         require(config.streamingLog == 0 && config.radixLog == 1, "kyberpe requires -k 0 -r 1")
         val output = Path.of(config.output.getOrElse("KyberHPM1PE.v"))
         Option(output.getParent).foreach(Files.createDirectories(_))
-        Files.writeString(output, KyberSystemVerilog.emit(config.top.getOrElse("KyberHPM1PE")))
-        writePresetArtifacts(config, output, "KyberMontgomery", 256, 256, KyberSystemVerilog.InverseCycles + 2, KyberSystemVerilog.InverseCycles)
+        Files.writeString(output, KyberSystemVerilog.emit(config.top.getOrElse("KyberHPM1PE"),banked=effectivePresetBackend==PresetBackend.Compact))
+        writePresetArtifacts(config, output, "KyberMontgomery", 256, 256, KyberSystemVerilog.InverseCycles + 2, KyberSystemVerilog.InverseCycles,Some(if effectivePresetBackend==PresetBackend.Compact then "kyber-pe1-banked" else "kyber-pe1"))
         println(s"Written design in $output.")
         return true
       require(Set("yata8", "yata64", "yata512")(config.domain.name), "raintt requires a YATA preset")
