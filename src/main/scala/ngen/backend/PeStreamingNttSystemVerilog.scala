@@ -22,7 +22,7 @@ object PeStreamingNttSystemVerilog:
     val gap = if profile == ProfileName.F300 then 1 else 0
     val stageCount = schedule.bundles.map(_.stage).distinct.size
     val executionCycles =
-      if schedule.radix == 2 then 1 + schedule.bundles.size + (PipelinedButterflySystemVerilog.latency(reduction) + 2) * stageCount
+      if schedule.radix == 2 then 1 + schedule.bundles.size + (PipelinedButterflySystemVerilog.latency(reduction, schedule.plan.domain.modulus.bitWidth) + 2) * stageCount
       else 1 + (3 + schedule.radixLog) * schedule.bundles.size + math.max(0, schedule.bundles.size - 1) * gap
     val latency = streamCycles + executionCycles + (if schedule.radix == 2 then 3 else 2)
     // Worst frame-admission interval with continuously ready output. Each banked

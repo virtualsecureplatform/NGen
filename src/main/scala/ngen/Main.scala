@@ -377,7 +377,7 @@ object Main:
           val metrics = PeStreamingNttSystemVerilog.metrics(schedule, config.streamingWidth, config.profile, peReductionKind)
           architectureParameters ++= Map(
             "pe_count" -> metrics.peCount,
-            "butterfly_pipeline_latency" -> (if config.radix == 2 then PipelinedButterflySystemVerilog.latency(peReductionKind) else config.radixLog),
+            "butterfly_pipeline_latency" -> (if config.radix == 2 then PipelinedButterflySystemVerilog.latency(peReductionKind, config.domain.modulus.bitWidth) else config.radixLog),
             "radix" -> metrics.radix,
             "bank_count_per_buffer" -> metrics.bankCount,
             "bank_depth" -> metrics.bankDepth,

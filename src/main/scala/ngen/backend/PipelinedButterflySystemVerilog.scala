@@ -7,8 +7,8 @@ import ngen.rtl.ReductionKind
 /** One-operation-per-cycle modular radix-2 butterfly pipelines. */
 object PipelinedButterflySystemVerilog:
   val Latency = 3
-  def latency(reduction: ReductionKind): Int =
-    if reduction == ReductionKind.Montgomery then MontgomeryButterflySystemVerilog.Latency else Latency
+  def latency(reduction: ReductionKind, width: Int = 32): Int =
+    if reduction == ReductionKind.Montgomery then MontgomeryButterflySystemVerilog.latency(width) else Latency
 
   def emit(field: Modulus, reduction: ReductionKind, top: String = "NGenPipelinedButterfly", runtimeField: Boolean = false): String =
     require(Set(ReductionKind.Barrett, ReductionKind.Montgomery, ReductionKind.Shoup, ReductionKind.FermatShift)(reduction))
