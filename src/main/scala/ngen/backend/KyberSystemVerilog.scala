@@ -6,7 +6,7 @@ import ngen.rtl.{IndexedOperation, MicroProgram}
 
 object KyberSystemVerilog:
   val ForwardCycles = 896
-  val InverseCycles = 1152
+  val InverseCycles = 896
   private val domain = Domains.Kyber256
   private val zetas = KyberNtt.zetas(domain).map(_.toInt)
   private def montgomeryConstant(value: Int): Int = ((BigInt(value) * (BigInt(1) << 16)) % 3329).toInt
@@ -38,10 +38,12 @@ object KyberSystemVerilog:
       while start < 256 do
         val zeta = zetas(constantIndex)
         constantIndex -= 1
-        for index <- start until start + length do result :+= MicroOp(2, index, index + length, zeta)
+        for index <- start until start + length do result :+= MicroOp(2, index, index + length, (zeta * 1665) % 3329)
         start += 2 * length
       length *= 2
-    result ++ Vector.tabulate(256)(index => MicroOp(3, index, index, 3303))
+    // Divide both butterfly outputs by two in every layer: seven layers
+    // provide the required 1/128 normalization without a final scaling pass.
+    result
 
   def emit(top: String = "KyberHPM1PE"): String =
     require(top.matches("[A-Za-z_][A-Za-z0-9_$]*"))
@@ -91,6 +93,9 @@ object KyberSystemVerilog:
        |  function automatic [11:0] kyber_add(input [11:0] a,input [11:0] b);
        |    reg [12:0] sum; begin sum={1'b0,a}+{1'b0,b}; if(sum>=KYBER_Q) sum=sum-KYBER_Q; kyber_add=sum[11:0]; end
        |  endfunction
+       |  function automatic [11:0] kyber_half(input [11:0] value);
+       |    reg [12:0] even_value;begin even_value={1'b0,value}+(value[0]?KYBER_Q:13'd0);kyber_half=even_value[12:1];end
+       |  endfunction
        |  function automatic [11:0] kyber_sub(input [11:0] a,input [11:0] b);
        |    reg [12:0] value; begin if(a>=b) value=a-b; else value={1'b0,a}+KYBER_Q-b; kyber_sub=value[11:0]; end
        |  endfunction
@@ -122,7 +127,7 @@ object KyberSystemVerilog:
        |      end else if(executing) begin
        |        if(operation_inverse) begin
        |          case(i_kind[pc])
-       |            2'd2: begin work[i_left[pc]]<=kyber_add(work[i_left[pc]],work[i_right[pc]]); work[i_right[pc]]<=kyber_mul(kyber_sub(work[i_right[pc]],work[i_left[pc]]),i_constant[pc]); end
+       |            2'd2: begin work[i_left[pc]]<=kyber_half(kyber_add(work[i_left[pc]],work[i_right[pc]])); work[i_right[pc]]<=kyber_mul(kyber_sub(work[i_right[pc]],work[i_left[pc]]),i_constant[pc]); end
        |            2'd3: work[i_left[pc]]<=kyber_mul(work[i_left[pc]],i_constant[pc]);
        |            default: begin end
        |          endcase
