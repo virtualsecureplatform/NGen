@@ -19,6 +19,8 @@ object PeStreamingNttSystemVerilog:
 
   def registeredIssue(schedule: PeNttSchedule): Boolean = schedule.radix == 2 && schedule.bundles.size >= 1024
 
+  def usesBlockControl(schedule: PeNttSchedule, runtimeControl: Boolean = false): Boolean = registeredIssue(schedule) && !runtimeControl
+
   def metrics(schedule: PeNttSchedule, streamingWidth: Int, profile: ProfileName, reduction: ReductionKind = ReductionKind.Barrett): Metrics =
     val streamCycles = schedule.plan.domain.size / streamingWidth
     val gap = if profile == ProfileName.F300 then 1 else 0
@@ -348,7 +350,7 @@ object PeStreamingNttSystemVerilog:
     // A next-address prefetch hides the synchronous control-ROM read. While
     // inactive fetch record zero; on each issue fetch the next record and hold
     // it through stage drains. No issue or arithmetic latency changes.
-    val blockControl = radix == 2 && !runtimeControl && schedule.bundles.size >= 1024
+    val blockControl = usesBlockControl(schedule, runtimeControl)
     val controlPrefetch = if blockControl then (0 until peCount).map { pe =>
       s"if(!exec_active||(issue_fire&&bundle_index<BUNDLE_COUNT-1))control_$pe<=control_${pe}_rom[!exec_active?0:bundle_index+1];"
     }.mkString else ""
