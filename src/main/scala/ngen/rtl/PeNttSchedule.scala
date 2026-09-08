@@ -94,6 +94,15 @@ object PeNttSchedule:
     }
 
     val transformStages: Vector[Vector[PeOperation]] = plan match
+      case complete: NttPlan if radixLog == 1 =>
+        // Use the actual stage graph rather than reconstructing full-transform
+        // strides. This also supports contiguous stage partitions safely.
+        complete.stages.map(_.butterflies.map { butterfly =>
+          require(butterfly.kind == ButterflyKind.DecimationInTime)
+          PeOperation(PeOperationKind.DecimationInTime, Vector(butterfly.left,butterfly.right), Vector(
+            PeAssignment(butterfly.left,Vector(PeTerm(0,1),PeTerm(1,butterfly.twiddle))),
+            PeAssignment(butterfly.right,Vector(PeTerm(0,1),PeTerm(1,field.subtract(0,butterfly.twiddle))))))
+        })
       case complete: NttPlan =>
         RadixFusionPlan(complete, radixLog).stages.map { stage =>
           stage.blocks.map { block =>

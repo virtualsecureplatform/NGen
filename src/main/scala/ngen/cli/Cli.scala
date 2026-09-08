@@ -31,7 +31,8 @@ final case class GeneratorConfig(
     dspDecompose: Boolean,
     runtimeControl: Boolean,
     graph: Boolean,
-    rtlGraph: Boolean
+    rtlGraph: Boolean,
+    stageGroups: Int = 1
 ):
   val streamingWidth: Int = 1 << streamingLog
   val radix: Int = 1 << radixLog
@@ -39,10 +40,13 @@ final case class GeneratorConfig(
   require(streamingLog >= 0 && streamingLog <= domain.logSize)
   require(radixLog > 0 && radixLog <= domain.logSize)
   require(domain.logSize % radixLog == 0, s"radix log $radixLog must divide transform log ${domain.logSize}")
+  require(stageGroups >= 1 && stageGroups <= domain.logSize, "stage groups must be within 1..log2(N)")
   require(peCount.forall(_ > 0), "PE count must be positive")
 
 enum Command:
   case Generate(config: GeneratorConfig)
+  case Plan(config: GeneratorConfig)
+  case Capabilities
   case SwitchTranspose(inputCycleLog: Int, inputLaneLog: Int, dataWidth: Int, fixedRate: Boolean, ratePreserving: Boolean, output: Option[String], top: Option[String])
   case ButterflyPipeline(modulus: Modulus, reduction: ReductionChoice, runtimeField: Boolean, output: Option[String], top: Option[String])
   case RnsPolynomial(basis: RnsBasis, emitCrt: Boolean, output: Option[String], top: Option[String])
@@ -71,6 +75,7 @@ object Cli:
       |  -four-step-factor <n1> First factor for four-step decomposition.
       |  -k <k>          log2 of the streaming width; defaults to n.
       |  -r <r>          log2 of the radix; custom domains default to radix 2.
+      |  -stage-groups <u> Chain u buffered radix-2 PE engines (custom ready-valid streams).
       |  -pe <count>     Reusable butterfly PE count; defaults to max(1, K/2).
       |  -q <prime>      Field modulus for a custom domain (decimal or 0x hexadecimal).
       |  -fermat <m>     Classical Fermat field F_m; requires -n and supports m=0..4.
@@ -106,6 +111,9 @@ object Cli:
       |  -check          Run the mathematical round-trip check before generation.
       |  -nologo         Accepted for SGen command-line compatibility.
       |
+      |  capabilities     Emit machine-readable search capabilities.
+      |  plan <options> <transform> Validate/lower in temporary storage and emit metadata JSON.
+      |
       |Transforms:
       |  ntt             Forward NTT.
       |  intt            Inverse NTT.
@@ -139,6 +147,11 @@ object Cli:
 
   def parse(rawArgs: Seq[String]): Command =
     if rawArgs.isEmpty then return Command.Help
+    if rawArgs == Seq("capabilities") then return Command.Capabilities
+    if rawArgs.headOption.contains("plan") then
+      return parse(rawArgs.tail) match
+        case Command.Generate(config) => Command.Plan(config)
+        case _ => throw new IllegalArgumentException("plan requires an NTT generation command")
 
     val args = mutable.Queue.from(rawArgs)
     var preset: Option[String] = None
@@ -147,6 +160,7 @@ object Cli:
     var convolutionRoot: Option[BigInt] = None
     var k: Option[Int] = None
     var r: Option[Int] = None
+    var stageGroups = 1
     var peCount: Option[Int] = None
     var q: Option[BigInt] = None
     var fermatIndex: Option[Int] = None
@@ -206,6 +220,7 @@ object Cli:
         case "-o" => output = Some(requiredValue(args, "-o"))
         case "-top" => top = Some(requiredValue(args, "-top"))
         case "-data-width" => dataWidth = requiredValue(args, "-data-width").toInt
+        case "-stage-groups" => stageGroups = requiredValue(args, "-stage-groups").toInt
         case "-profile" => profile = ProfileName.parse(requiredValue(args, "-profile"))
         case "-architecture" => architecture = ArchitectureKind.parse(requiredValue(args, "-architecture"))
         case "-preset-backend" => presetBackend = PresetBackend.parse(requiredValue(args, "-preset-backend"))
@@ -360,7 +375,8 @@ object Cli:
             dspDecompose,
             runtimeControl,
             graph,
-            rtlGraph
+            rtlGraph,
+            stageGroups
           )
         )
       case _ => throw new IllegalArgumentException("a transform name is required")

@@ -360,7 +360,7 @@ object PeStreamingNttSystemVerilog:
     val stageLastIndices = schedule.bundles.indices.filter(index => index == schedule.bundles.size - 1 || schedule.bundles(index + 1).stage != schedule.bundles(index).stage)
     val issueLastStage = stageLastIndices.map(index => s"(bundle_index==$index)").mkString("(","||",")")
     val pipelineControllerDeclarations = if radix == 2 then
-      s"reg issued_valid,launch_valid,draining,all_issued;integer inflight_count;wire issue_fire=exec_active&&!draining;wire retire_fire=pe_pipeline_valid_0;wire issue_last_stage=$issueLastStage;"
+      s"reg issued_valid,launch_valid,draining,all_issued;integer inflight_count;wire issue_fire=exec_active&&!draining;wire retire_fire;wire issue_last_stage=$issueLastStage;"
     else ""
     val executionPorts = if radix == 2 then
       s"if(issue_fire)begin $dynamicReadPorts end if(retire_fire)begin $dynamicWritePorts end"
@@ -431,8 +431,9 @@ object PeStreamingNttSystemVerilog:
        |  $reductionParameter
        |  reg [2:0] buffer_0_state,buffer_1_state;reg capture_active,capture_buffer,exec_active,exec_buffer,output_active,output_buffer,output_prefetched;reg [1:0] exec_phase;integer capture_count,bundle_index,gap_count,output_count;$pipelineControllerDeclarations
        |  $memories
-       |  $romDeclarations
        |  $peDeclarations
+       |  ${if radix == 2 then "assign retire_fire=pe_pipeline_valid_0;" else ""}
+       |  $romDeclarations
        |  $readyAssignment
        |  function automatic [${width - 1}:0] mod_add(input [${width - 1}:0] a,input [${width - 1}:0] b);reg [$width:0] sum,reduced;begin sum={1'b0,a}+{1'b0,b};if(sum>=MODULUS_EXT)reduced=sum-MODULUS_EXT;else reduced=sum;mod_add=reduced[${width - 1}:0];end endfunction
        |  function automatic [${width - 1}:0] mod_sub(input [${width - 1}:0] a,input [${width - 1}:0] b);reg [$width:0] difference;begin if(a>=b)difference={1'b0,a}-{1'b0,b};else difference={1'b0,a}+MODULUS_EXT-{1'b0,b};mod_sub=difference[${width - 1}:0];end endfunction

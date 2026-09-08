@@ -30,37 +30,34 @@ object SwitchTransposeSystemVerilog:
         s"${lower(lane,stage)} <= ${lower(lane,stage-1)};"
       ))
     }.mkString("\n      ")
-    val control =
-      if bits == 1 then
-        """valid_out <= valid_in;
-          |      if (valid_in) select <= ~select;
-          |      else select <= 1'b0;""".stripMargin
-      else
-        s"""case (state)
-           |        2'd0: if (valid_in) begin state <= 2'd1; count <= count + 1'b1; end
-           |        2'd1: begin count <= count + 1'b1; if (count == ${half - 1}) begin select <= ~select; count <= 0; valid_out <= 1'b1; state <= 2'd2; end end
-           |        2'd2: begin count <= count + 1'b1; if (count == ${half - 1}) begin select <= ~select; count <= 0; if ((~select) && (~valid_in)) begin valid_out <= 1'b0; select <= 1'b0; state <= 2'd0; end end end
-           |        default: begin state <= 2'd0; valid_out <= 1'b0; select <= 1'b0; count <= 0; end
-           |      endcase""".stripMargin
+    // Each unit delays validity by half a frame, just like its data paths.
+    // Track input phase independently so even a one-cycle inter-frame gap is
+    // preserved while the previous frame is still draining downstream.
+    val validShift = if half == 1 then "valid_delay <= valid_in;"
+      else s"valid_delay <= {valid_delay[${half - 2}:0], valid_in};"
     s"""module ${unitName(prefix, bits)}(
        |  input clock, input reset, input valid_in,
        |  input [${width * dataWidth - 1}:0] data_in,
        |  output valid_out, output [${width * dataWidth - 1}:0] data_out
        |);
-       |  reg valid_reg, select; reg [1:0] state; integer count;
-       |  assign valid_out = valid_reg;
+       |  reg [${bits - 1}:0] phase;
+       |  reg [${half - 1}:0] valid_delay;
+       |  wire select = phase[${bits - 1}];
+       |  assign valid_out = valid_delay[${half - 1}];
        |  $registers
        |  $outputs
        |  always @(posedge clock) begin
-       |    if (reset) begin valid_reg <= 1'b0; select <= 1'b0; state <= 0; count <= 0;
+       |    if (reset) begin phase <= '0; valid_delay <= '0;
        |      $resetPipes
        |    end else begin
        |      $shiftPipes
-       |      $control
+       |      if (valid_in) phase <= phase + 1'b1;
+       |      else phase <= '0;
+       |      $validShift
        |    end
        |  end
        |endmodule
-       |""".stripMargin.replace("valid_out <=", "valid_reg <=")
+       |""".stripMargin
 
   private def network(bits: Int, dataWidth: Int, prefix: String = ""): String =
     val width = 1 << bits
@@ -77,7 +74,7 @@ object SwitchTransposeSystemVerilog:
          |  ${unitName(prefix, bits)} unit(clock,reset,valid_in,data_in,unit_valid,unit_data);
          |  ${networkName(prefix, bits - 1)} lower(clock,reset,unit_valid,unit_data[0 +: $halfBits],lower_valid,data_out[0 +: $halfBits]);
          |  ${networkName(prefix, bits - 1)} upper(clock,reset,unit_valid,unit_data[$halfBits +: $halfBits],upper_valid,data_out[$halfBits +: $halfBits]);
-         |  assign valid_out = lower_valid;
+         |  assign valid_out = lower_valid & upper_valid;
          |endmodule
          |""".stripMargin
 

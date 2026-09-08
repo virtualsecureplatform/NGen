@@ -106,6 +106,11 @@ object Main:
 
   private def emit(config: GeneratorConfig): Boolean =
     val genericDomain = config.domain.name == "custom" || config.domain.name.startsWith("fermat") || config.domain.name.startsWith("generalized-fermat")
+    if config.stageGroups > 1 then
+      require(genericDomain && Set(ArchitectureKind.Streamed,ArchitectureKind.Compact)(config.architecture) &&
+        config.protocol == StreamProtocol.ReadyValid && config.interfaceKind == InterfaceKind.Raw &&
+        config.transpose == ngen.rtl.TransposeKind.Indexed && config.radixLog == 1 && !config.runtimeControl,
+        "stage groups require a custom radix-2 streamed/compact ready-valid raw interface with indexed ordering")
     if genericDomain then require(config.presetBackend == PresetBackend.Auto, "-preset-backend is only valid with a built-in preset")
     val architectureBackend = config.architecture match
       case ArchitectureKind.Auto => None
@@ -345,6 +350,9 @@ object Main:
             ReductionKind.Barrett, profile
           )
         else
+          // The reusable three-stage PE has no sparse-fold datapath. Auto
+          // selection must resolve to a supported implementation and report it.
+          val peReductionKind = if reductionKind == ReductionKind.SparseFold then ReductionKind.Barrett else reductionKind
           val basePlan: StreamingNttPlan = config.domain.shape match
             case ngen.algebra.TransformShape.IncompleteNegacyclic(_) =>
               require(config.inputOrder == DataOrder.Natural && config.outputOrder == DataOrder.Natural,
@@ -373,7 +381,11 @@ object Main:
           )
           val useAxi=config.interfaceKind==InterfaceKind.Axi4Stream
           val coreTop = if useSwitchTranspose || useAxi then s"${top}Core" else top
-          val coreRtl = PeStreamingNttSystemVerilog.emit(schedule, config.streamingWidth, coreTop, config.profile, reductionKind, config.protocol, config.runtimeControl)
+          val coreRtl = if config.stageGroups > 1 then
+            require(basePlan.isInstanceOf[NttPlan], "stage groups require a complete transform")
+            architectureParameters ++= Map("stage_groups" -> config.stageGroups, "pe_count_total" -> (metrics.peCount * config.stageGroups), "coefficient_buffers" -> (2 * config.stageGroups))
+            ngen.backend.PartitionedNttSystemVerilog.emit(basePlan.asInstanceOf[NttPlan],config.streamingWidth,requestedPeCount,config.stageGroups,coreTop,config.profile,peReductionKind)
+          else PeStreamingNttSystemVerilog.emit(schedule, config.streamingWidth, coreTop, config.profile, peReductionKind, config.protocol, config.runtimeControl)
           Files.writeString(output,
             if useSwitchTranspose then GenericSwitchTransposeWrapper.emit(coreRtl, top, coreTop, config.streamingWidth, config.domain.modulus.bitWidth)
             else if useAxi then Axi4StreamWrapper.emit(coreRtl,top,coreTop,config.streamingWidth,config.domain.modulus.bitWidth,metrics.inputCycles)
@@ -381,15 +393,19 @@ object Main:
           val controlPorts = config.protocol match
             case StreamProtocol.NextPulse => Vector(Port("next", PortDirection.Input, ValueFormat.Valid), Port("ready", PortDirection.Output, ValueFormat.Valid), Port("next_out", PortDirection.Output, ValueFormat.Valid))
             case StreamProtocol.ReadyValid => Vector(Port("in_valid", PortDirection.Input, ValueFormat.Valid), Port("in_ready", PortDirection.Output, ValueFormat.Valid), Port("out_valid", PortDirection.Output, ValueFormat.Valid), Port("out_ready", PortDirection.Input, ValueFormat.Valid))
+          val partitionMetrics = if config.stageGroups > 1 then
+            ngen.backend.PartitionedNttSystemVerilog.partitions(basePlan.asInstanceOf[NttPlan],config.stageGroups).map(part =>
+              PeStreamingNttSystemVerilog.metrics(PeNttSchedule.build(part,1,requestedPeCount,config.streamingWidth),config.streamingWidth,config.profile))
+          else Vector(metrics)
           Architecture(
-            s"custom-${if inverse then "intt" else "ntt"}-banked-pe-radix${config.radix}",
+            s"custom-${if inverse then "intt" else "ntt"}-${if config.stageGroups > 1 then s"partitioned-${config.stageGroups}-" else ""}banked-pe-radix${config.radix}",
             Vector(Port("clock", PortDirection.Input, ValueFormat.Valid), Port("reset", PortDirection.Input, ValueFormat.Valid)) ++ controlPorts,
             Vector.empty,
-            Vector(ngen.rtl.MemorySpec("coefficient_buffers", metrics.bankDepth, ValueFormat.unsigned(config.domain.modulus.bitWidth), banks = 2 * metrics.bankCount, readLatency = 1)),
+            Vector(ngen.rtl.MemorySpec("coefficient_buffers", metrics.bankDepth, ValueFormat.unsigned(config.domain.modulus.bitWidth), banks = 2 * config.stageGroups * metrics.bankCount, readLatency = 1)),
             Vector(ngen.rtl.CounterSpec("capture", metrics.inputCycles), ngen.rtl.CounterSpec("bundle", math.max(1, metrics.bundleCount)), ngen.rtl.CounterSpec("output", metrics.outputCycles)),
             StreamingContract(config.domain.size, config.streamingWidth, metrics.inputCycles, metrics.outputCycles,
-              metrics.latency + (if useSwitchTranspose then 2 * (config.streamingWidth - 1) else 0), metrics.initiationInterval),
-            reductionKind, profile
+              partitionMetrics.map(_.latency).sum + (if useSwitchTranspose then 2 * (config.streamingWidth - 1) else 0), partitionMetrics.map(_.initiationInterval).max),
+            peReductionKind, profile
           )
       val metadata = DesignMetadata(Cli.Version, config.domain, architecture, if inverse then "inverse" else "forward", config.radix, output.toString,
         config.inputOrder.toString.toLowerCase, config.outputOrder.toString.toLowerCase,
@@ -409,6 +425,19 @@ object Main:
   def main(args: Array[String]): Unit =
     try
       Cli.parse(args.toSeq) match
+        case Command.Capabilities => println(ngen.backend.SearchCapabilities.json)
+        case Command.Plan(config) =>
+          val temp = Files.createTempDirectory("ngen-plan-")
+          try
+            val output = temp.resolve("design.sv")
+            Console.withOut(new java.io.PrintStream(java.io.OutputStream.nullOutputStream())) {
+              require(emit(config.copy(output=Some(output.toString),graph=false,rtlGraph=false)), "unsupported generation configuration")
+            }
+            println(Files.readString(temp.resolve("design.json")).replace(output.toString,"<planned-output>"))
+          finally
+            val paths=Files.walk(temp)
+            try paths.sorted(java.util.Comparator.reverseOrder()).forEach(path => Files.delete(path))
+            finally paths.close()
         case Command.Help => println(Cli.usage)
         case Command.Version => println(Cli.Version)
         case Command.Presets =>

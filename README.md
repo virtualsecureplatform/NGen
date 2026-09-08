@@ -225,6 +225,11 @@ The standalone primitive/network can be emitted with:
 ./ngen.bat -n 2 -k 3 -data-width 32 -o transpose4x8.sv switchtranspose
 ```
 
+Square frames contain `2^n` consecutive valid input cycles. Frames may be
+back-to-back or separated by any number of idle cycles; bubbles within a frame
+are not supported. Output validity follows input validity after `2^n - 1`
+cycles, with the same gaps between frames.
+
 The second form is rectangular: it accepts four cycles of eight elements and
 emits eight cycles of four elements. Square shapes retain the recursive switch
 network; rectangular shapes use an explicit width-changing tensor adapter.
@@ -283,6 +288,9 @@ couple NGen to the LLM candidate-selection runner.
   Kyber's incomplete schedule, timed alignment, and code generation.
 - `scripts/test_generated_rtl.sh` lint-compiles and simulates a generated custom
   NTT against a known vector.
+- `scripts/test_switch_transpose_stream.sh` uses Icarus Verilog to check square
+  networks with 2–32 lanes, exact output latency, consecutive frames, short and
+  long frame gaps, changing idle data, and reset with data in flight.
 - `scripts/test_switch_transpose.sh` verifies an 8-by-8 tagged stream through
   the recursive switch network, and the Yosys smoke suite includes a
   switch-backed YATA streaming wrapper.
@@ -352,3 +360,17 @@ separate; Vivado/PPA numbers still require the target toolchain and constraints.
 
 NGen is GPL-3.0 licensed. Generated designs do not copy checked-in reference
 RTL; constants and schedules are derived from the declared transform domains.
+
+### Buffered stage partitioning and search metadata
+
+For custom radix-2 streamed ready/valid transforms, `-stage-groups U` partitions
+contiguous NTT stages across U independently buffered PE engines. Each engine
+uses `-pe` processing elements. This trades coefficient storage and arithmetic
+for overlap between frames; it is not an SDF/MDC implementation. Groups must lie
+between 1 and log2(N). Non-square, partially filled stage groups are supported.
+
+`bash ngen.bat capabilities` prints the machine-readable search contract.
+`bash ngen.bat plan <generator arguments>` runs the real lowering into temporary
+files and prints metadata without leaving a generated design in the output path.
+Metadata contains declared core timing; the external architecture-search runner
+measures RTL timing independently and accounts for its registered boundary.
