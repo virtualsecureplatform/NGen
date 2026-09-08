@@ -52,6 +52,12 @@ object Main:
     val base = artifactBase(output)
     val fullThroughput = architecture.contains("full-throughput")
     val minimumGap = math.max(0, initiationInterval - inputCycles)
+    val presetContract = if config.domain.name=="kyber256" then
+      val storage = if architecture=="kyber-pe1-banked" then "three-logical-buffers-in-two-physical-banks" else "register-arrays"
+      val phases = if architecture=="kyber-pe1-banked" then "serialized-load-compute-read" else "preset-command-interface"
+      val resetContents = if architecture=="kyber-pe1-banked" then "undefined-until-full-load" else "zero"
+      s""""preset_contract": {"forward_input_order":"natural","inverse_input_order":"mixed-4","forward_output_order":"mixed-4","inverse_output_order":"interleaved-halves","storage":"$storage","host_schedule":"$phases","reset_contents":"$resetContents","timing_scope":"declared compute schedule; transaction and initiation interval require interface measurement"},"""
+    else ""
     val json = s"""{
       |  "schema": "ngen-design-v1",
       |  "generator_version": "${Cli.Version}",
@@ -66,6 +72,7 @@ object Main:
       |  "radix": ${config.radix},
       |  "profile": "$profile",
       |  "architecture": "$architecture",
+      |  $presetContract
       |  "reduction_request": "${config.reduction.toString.toLowerCase}",
       |  "transpose": "${config.transpose.toString.toLowerCase}",
       |  "reduction": "$reduction",
