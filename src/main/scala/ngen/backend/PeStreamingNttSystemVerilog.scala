@@ -17,16 +17,17 @@ object PeStreamingNttSystemVerilog:
       radix: Int
   )
 
-  def metrics(schedule: PeNttSchedule, streamingWidth: Int, profile: ProfileName): Metrics =
+  def metrics(schedule: PeNttSchedule, streamingWidth: Int, profile: ProfileName, reduction: ReductionKind = ReductionKind.Barrett): Metrics =
     val streamCycles = schedule.plan.domain.size / streamingWidth
     val gap = if profile == ProfileName.F300 then 1 else 0
     val stageCount = schedule.bundles.map(_.stage).distinct.size
     val executionCycles =
-      if schedule.radix == 2 then 1 + schedule.bundles.size + 5 * stageCount
+      if schedule.radix == 2 then 1 + schedule.bundles.size + (PipelinedButterflySystemVerilog.latency(reduction) + 2) * stageCount
       else 1 + (3 + schedule.radixLog) * schedule.bundles.size + math.max(0, schedule.bundles.size - 1) * gap
-    val latency = streamCycles + executionCycles + 2
-    // Conservative two-buffer bound; capture and output overlap execution whenever a buffer is available.
-    val initiationInterval = math.max(streamCycles, executionCycles)
+    val latency = streamCycles + executionCycles + (if schedule.radix == 2 then 3 else 2)
+    // Worst frame-admission interval with continuously ready output. Each banked
+    // output beat requires a synchronous prefetch and a transfer cycle.
+    val initiationInterval = if schedule.radix == 2 then executionCycles + 2 * streamCycles + 2 else math.max(streamCycles, executionCycles)
     Metrics(streamCycles, streamCycles, schedule.bundles.size, executionCycles, latency, initiationInterval,
       schedule.mapping.bankCount, schedule.mapping.depth, schedule.peCount, schedule.radix)
 

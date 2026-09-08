@@ -367,9 +367,10 @@ object Main:
           val plan = if useSwitchTranspose then SwitchBoundaryPlan(basePlan, config.streamingWidth) else basePlan
           val requestedPeCount = config.peCount.getOrElse(math.max(1, config.streamingWidth / 2))
           val schedule = PeNttSchedule.build(plan, config.radixLog, requestedPeCount, config.streamingWidth)
-          val metrics = PeStreamingNttSystemVerilog.metrics(schedule, config.streamingWidth, config.profile)
+          val metrics = PeStreamingNttSystemVerilog.metrics(schedule, config.streamingWidth, config.profile, peReductionKind)
           architectureParameters ++= Map(
             "pe_count" -> metrics.peCount,
+            "butterfly_pipeline_latency" -> (if config.radix == 2 then PipelinedButterflySystemVerilog.latency(peReductionKind) else config.radixLog),
             "radix" -> metrics.radix,
             "bank_count_per_buffer" -> metrics.bankCount,
             "bank_depth" -> metrics.bankDepth,
@@ -395,7 +396,7 @@ object Main:
             case StreamProtocol.ReadyValid => Vector(Port("in_valid", PortDirection.Input, ValueFormat.Valid), Port("in_ready", PortDirection.Output, ValueFormat.Valid), Port("out_valid", PortDirection.Output, ValueFormat.Valid), Port("out_ready", PortDirection.Input, ValueFormat.Valid))
           val partitionMetrics = if config.stageGroups > 1 then
             ngen.backend.PartitionedNttSystemVerilog.partitions(basePlan.asInstanceOf[NttPlan],config.stageGroups).map(part =>
-              PeStreamingNttSystemVerilog.metrics(PeNttSchedule.build(part,1,requestedPeCount,config.streamingWidth),config.streamingWidth,config.profile))
+              PeStreamingNttSystemVerilog.metrics(PeNttSchedule.build(part,1,requestedPeCount,config.streamingWidth),config.streamingWidth,config.profile,peReductionKind))
           else Vector(metrics)
           Architecture(
             s"custom-${if inverse then "intt" else "ntt"}-${if config.stageGroups > 1 then s"partitioned-${config.stageGroups}-" else ""}banked-pe-radix${config.radix}",
@@ -404,7 +405,7 @@ object Main:
             Vector(ngen.rtl.MemorySpec("coefficient_buffers", metrics.bankDepth, ValueFormat.unsigned(config.domain.modulus.bitWidth), banks = 2 * config.stageGroups * metrics.bankCount, readLatency = 1)),
             Vector(ngen.rtl.CounterSpec("capture", metrics.inputCycles), ngen.rtl.CounterSpec("bundle", math.max(1, metrics.bundleCount)), ngen.rtl.CounterSpec("output", metrics.outputCycles)),
             StreamingContract(config.domain.size, config.streamingWidth, metrics.inputCycles, metrics.outputCycles,
-              partitionMetrics.map(_.latency).sum + (if useSwitchTranspose then 2 * (config.streamingWidth - 1) else 0), partitionMetrics.map(_.initiationInterval).max),
+              partitionMetrics.map(_.latency).sum + (config.stageGroups - 1) * (metrics.inputCycles - 1) + (if useSwitchTranspose then 2 * (config.streamingWidth - 1) else 0), partitionMetrics.map(_.initiationInterval).max),
             peReductionKind, profile
           )
       val metadata = DesignMetadata(Cli.Version, config.domain, architecture, if inverse then "inverse" else "forward", config.radix, output.toString,

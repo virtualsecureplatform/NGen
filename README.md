@@ -163,9 +163,12 @@ transaction `TLAST`. It also checks incoming `TLAST` boundaries. AXI4-Lite and
 other bus wrappers are intentionally not supported. Without this option, NGen
 emits the original raw interface and no AXI-related logic.
 
-Radix-2 PEs use a three-stage tagged arithmetic pipeline for Barrett,
-Montgomery, or Shoup multiplication. The same pipeline can be emitted as a
-standalone one-operation-per-cycle component with:
+Radix-2 PEs use tagged arithmetic pipelines: three cycles for Barrett/Shoup
+and seven cycles for Montgomery. The Montgomery path separates the input
+subtraction, multiplies, carry sum, correction, and final butterfly operation.
+Every pipeline accepts one operation per cycle. Metadata includes the selected
+`butterfly_pipeline_latency` and accounts for it when stages drain. The pipeline
+can also be emitted as a standalone component with:
 
 ```bash
 ./ngen.bat -q 12289 -reduction shoup -o butterfly-pipeline.sv butterflypipeline
