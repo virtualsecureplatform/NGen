@@ -22,3 +22,13 @@ class PartitionedNttSpec extends AnyFunSuite:
     assert(config.stageGroups==3)
     assert(Cli.parse("plan"+:args)==Command.Plan(config))
     assert(Cli.parse(Seq("capabilities"))==Command.Capabilities)
+
+  test("effective issue and ROM selections follow each actual partition"):
+    import ngen.backend.PeStreamingNttSystemVerilog
+    val large=NttDomain("q12289",1024,Modulus(12289),10302,TransformShape.Cyclic)
+    val parts=PartitionedNttSystemVerilog.partitions(NttPlan.radix2(large,false),3)
+      .map(part=>PeNttSchedule.build(part,1,2,4))
+    assert(parts.map(_.bundles.size)==Vector(768,768,1024))
+    assert(parts.count(PeStreamingNttSystemVerilog.registeredIssue)==1)
+    assert(parts.count(part=>PeStreamingNttSystemVerilog.usesBlockControl(part))==1)
+    assert(parts.count(part=>PeStreamingNttSystemVerilog.usesBlockControl(part,runtimeControl=true))==0)

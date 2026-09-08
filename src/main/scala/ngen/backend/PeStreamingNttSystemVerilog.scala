@@ -17,12 +17,16 @@ object PeStreamingNttSystemVerilog:
       radix: Int
   )
 
+  def registeredIssue(schedule: PeNttSchedule): Boolean = schedule.radix == 2 && schedule.bundles.size >= 1024
+
+  def usesBlockControl(schedule: PeNttSchedule, runtimeControl: Boolean = false): Boolean = registeredIssue(schedule) && !runtimeControl
+
   def metrics(schedule: PeNttSchedule, streamingWidth: Int, profile: ProfileName, reduction: ReductionKind = ReductionKind.Barrett): Metrics =
     val streamCycles = schedule.plan.domain.size / streamingWidth
     val gap = if profile == ProfileName.F300 then 1 else 0
     val stageCount = schedule.bundles.map(_.stage).distinct.size
     val executionCycles =
-      if schedule.radix == 2 then 1 + schedule.bundles.size + (PipelinedButterflySystemVerilog.latency(reduction, schedule.plan.domain.modulus.bitWidth) + 2) * stageCount
+      if schedule.radix == 2 then 1 + schedule.bundles.size + (PipelinedButterflySystemVerilog.latency(reduction, schedule.plan.domain.modulus.bitWidth) + 2 + (if registeredIssue(schedule) then 1 else 0)) * stageCount
       else 1 + (3 + schedule.radixLog) * schedule.bundles.size + math.max(0, schedule.bundles.size - 1) * gap
     val latency = streamCycles + executionCycles + (if schedule.radix == 2 then 3 else 2)
     // Worst frame-admission interval with continuously ready output. Each banked
@@ -346,7 +350,7 @@ object PeStreamingNttSystemVerilog:
     // A next-address prefetch hides the synchronous control-ROM read. While
     // inactive fetch record zero; on each issue fetch the next record and hold
     // it through stage drains. No issue or arithmetic latency changes.
-    val blockControl = radix == 2 && !runtimeControl && schedule.bundles.size >= 1024
+    val blockControl = usesBlockControl(schedule, runtimeControl)
     val controlPrefetch = if blockControl then (0 until peCount).map { pe =>
       s"if(!exec_active||(issue_fire&&bundle_index<BUNDLE_COUNT-1))control_$pe<=control_${pe}_rom[!exec_active?0:bundle_index+1];"
     }.mkString else ""
@@ -402,10 +406,33 @@ object PeStreamingNttSystemVerilog:
     val pipelineControllerDeclarations = if radix == 2 then
       s"reg issued_valid,launch_valid,draining,all_issued;integer inflight_count;wire issue_fire=exec_active&&!draining;wire retire_fire;wire issue_last_stage=$issueLastStage;"
     else ""
+    val registerIssue = registeredIssue(schedule)
+    val readRegisters = (for buffer <- 0 until 2; bank <- 0 until mapping.bankCount yield
+      s"reg issue_${portName(buffer,bank,"read_enable")};reg [${rowWidth-1}:0] issue_${portName(buffer,bank,"read_address")};").mkString
+    val readRegisterDefaults = (for buffer <- 0 until 2; bank <- 0 until mapping.bankCount yield
+      s"issue_${portName(buffer,bank,"read_enable")}<=0;").mkString
+    val decodedReads = (for buffer <- 0 until 2; bank <- 0 until mapping.bankCount; suffix <- Vector("read_enable","read_address") yield portName(buffer,bank,suffix))
+      .foldLeft(dynamicReadPorts)((code,name)=>code.replace(name,s"issue_$name"))
+      .replace("=1;","<=1;").replace("=input_row_","<=input_row_")
+    val registeredPorts = (for buffer <- 0 until 2; bank <- 0 until mapping.bankCount yield
+      s"if(issue_${portName(buffer,bank,"read_enable")})begin ${portName(buffer,bank,"read_enable")}=1;${portName(buffer,bank,"read_address")}=issue_${portName(buffer,bank,"read_address")};end").mkString(" ")
+    val issueRegisters = if registerIssue then s"reg read_issue_valid;$readRegisters" +
+      (0 until peCount).map(pe=>s"reg [${controlRecordWidth-1}:0] read_control_$pe;").mkString else ""
+    val registeredIssueLogic = if registerIssue then
+      s"""always @(posedge clock)begin
+         | if(reset)read_issue_valid<=0;
+         | else begin
+         |  read_issue_valid<=issue_fire;$readRegisterDefaults
+         |  if(issue_fire)begin $decodedReads ${(0 until peCount).map(pe=>s"read_control_$pe<=control_$pe;").mkString} end
+         |  if(read_issue_valid)begin ${(0 until peCount).map(pe=>s"issued_control_$pe<=read_control_$pe;").mkString} end
+         | end
+         |end""".stripMargin
+    else ""
+    val executionReads = if registerIssue then s"if(read_issue_valid)begin $registeredPorts end" else s"if(issue_fire)begin $dynamicReadPorts end"
     val executionPorts = if radix == 2 then
-      s"if(issue_fire)begin $dynamicReadPorts end if(retire_fire)begin $dynamicWritePorts end"
+      s"$executionReads if(retire_fire)begin $dynamicWritePorts end"
     else s"if(exec_active&&gap_count==0)begin if(exec_phase==0)begin $dynamicReadPorts end else if(exec_phase==$writePhase&&$pipelineRetire)begin $dynamicWritePorts end end"
-    val issueControlLoads = (0 until peCount).map(pe => s"issued_control_$pe<=control_$pe;").mkString
+    val issueControlLoads = if registerIssue then "" else (0 until peCount).map(pe => s"issued_control_$pe<=control_$pe;").mkString
     val launchControlLoads = (0 until peCount).map(pe => s"launch_control_$pe<=issued_control_$pe;").mkString
     val pipelinedExecution =
       s"""if(!exec_active)begin
@@ -413,7 +440,7 @@ object PeStreamingNttSystemVerilog:
          |        if(buffer_0_state==READY_STATE)begin exec_active<=1;exec_buffer<=0;buffer_0_state<=EXECUTING;bundle_index<=0;draining<=0;all_issued<=0;inflight_count<=0;end
          |        else if(buffer_1_state==READY_STATE)begin exec_active<=1;exec_buffer<=1;buffer_1_state<=EXECUTING;bundle_index<=0;draining<=0;all_issued<=0;inflight_count<=0;end
          |      end else begin
-         |        issued_valid<=issue_fire;launch_valid<=issued_valid;
+         |        issued_valid<=${if registerIssue then "read_issue_valid" else "issue_fire"};launch_valid<=issued_valid;
          |        if(issue_fire)begin $issueControlLoads if(issue_last_stage)draining<=1;if(bundle_index==BUNDLE_COUNT-1)all_issued<=1;else bundle_index<=bundle_index+1;end
          |        if(issued_valid)begin $dynamicLoads $launchControlLoads end
          |        if(issue_fire&&!retire_fire)inflight_count<=inflight_count+1;else if(!issue_fire&&retire_fire)inflight_count<=inflight_count-1;
@@ -471,9 +498,9 @@ object PeStreamingNttSystemVerilog:
        |  $reductionParameter
        |  reg [2:0] buffer_0_state,buffer_1_state;reg capture_active,capture_buffer,exec_active,exec_buffer,output_active,output_buffer,output_prefetched;reg [1:0] exec_phase;integer capture_count,bundle_index,gap_count,output_count;$pipelineControllerDeclarations
        |  $memories
-       |  $peDeclarations
+       |  $peDeclarations${if registerIssue then s"\n  $issueRegisters" else ""}
        |  ${if radix == 2 then "assign retire_fire=pe_pipeline_valid_0;" else ""}
-       |  $romDeclarations
+       |  $romDeclarations${if registerIssue then s"\n  $registeredIssueLogic" else ""}
        |  $readyAssignment
        |  function automatic [${width - 1}:0] mod_add(input [${width - 1}:0] a,input [${width - 1}:0] b);reg [$width:0] sum,reduced;begin sum={1'b0,a}+{1'b0,b};if(sum>=MODULUS_EXT)reduced=sum-MODULUS_EXT;else reduced=sum;mod_add=reduced[${width - 1}:0];end endfunction
        |  function automatic [${width - 1}:0] mod_sub(input [${width - 1}:0] a,input [${width - 1}:0] b);reg [$width:0] difference;begin if(a>=b)difference={1'b0,a}-{1'b0,b};else difference={1'b0,a}+MODULUS_EXT-{1'b0,b};mod_sub=difference[${width - 1}:0];end endfunction
