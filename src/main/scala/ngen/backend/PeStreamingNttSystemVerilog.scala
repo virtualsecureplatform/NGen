@@ -143,7 +143,7 @@ object PeStreamingNttSystemVerilog:
         val address = plan.inputAddresses(cycle * streamingWidth + lane)
         writePort(buffer,address,s"i$lane")
       }.mkString(" ")
-    val captureCases = (0 until streamCycles).map { cycle =>
+    lazy val captureCases = (0 until streamCycles).map { cycle =>
       val writes = s"if(capture_buffer)begin ${captureWrites(1,cycle)} end else begin ${captureWrites(0,cycle)} end"
       s"$cycle:begin $writes end"
     }.mkString("\n          ")
@@ -154,15 +154,44 @@ object PeStreamingNttSystemVerilog:
     def outputReadPorts(buffer: Int, cycle: Int): String = Vector.tabulate(streamingWidth) { lane =>
       readPort(buffer,plan.outputAddresses(cycle * streamingWidth + lane))
     }.mkString(" ")
-    val outputValueCases = (0 until streamCycles).map { cycle =>
+    lazy val outputValueCases = (0 until streamCycles).map { cycle =>
       s"$cycle:begin if(output_buffer)begin ${outputValues(1,cycle)} end else begin ${outputValues(0,cycle)} end end"
     }.mkString("\n          ")
-    val outputCurrentReadCases = (0 until streamCycles).map { cycle =>
+    lazy val outputCurrentReadCases = (0 until streamCycles).map { cycle =>
       s"$cycle:begin if(output_buffer)begin ${outputReadPorts(1,cycle)} end else begin ${outputReadPorts(0,cycle)} end end"
     }.mkString("\n          ")
-    val outputNextReadCases = (0 until math.max(0,streamCycles - 1)).map { cycle =>
+    lazy val outputNextReadCases = (0 until math.max(0,streamCycles - 1)).map { cycle =>
       s"$cycle:begin if(output_buffer)begin ${outputReadPorts(1,cycle + 1)} end else begin ${outputReadPorts(0,cycle + 1)} end end"
     }.mkString("\n          ")
+
+    // I/O address maps are usually affine bit permutations plus XOR bank folding.
+    // Check the complete table, including custom plans, before using compact logic.
+    def compactStreamPorts(addresses: Vector[Int], counter: String, bufferSelector: String, write: Boolean, valuesOnly: Boolean = false): Option[String] =
+      val bankBits = math.max(1,Integer.numberOfTrailingZeros(mapping.bankCount))
+      val lanes = Vector.tabulate(streamingWidth) { lane =>
+        val laneAddresses = Vector.tabulate(streamCycles)(cycle => addresses(cycle * streamingWidth + lane))
+        for
+          bankExpression <- AffineAddressExpression.emit(laneAddresses.map(mapping.bank),counter,bankBits)
+          rowExpression <- AffineAddressExpression.emit(laneAddresses.map(mapping.row),counter,rowWidth)
+        yield
+          val cases = (0 until mapping.bankCount).map { bank =>
+            def action(buffer: Int): String =
+              if valuesOnly then s"o$lane<=${portName(buffer,bank,"read_data")};"
+              else if write then s"${portName(buffer,bank,"write_enable")}=1;${portName(buffer,bank,"write_address")}=$rowExpression;${portName(buffer,bank,"write_data")}=i$lane;"
+              else s"${portName(buffer,bank,"read_enable")}=1;${portName(buffer,bank,"read_address")}=$rowExpression;"
+            s"$bank:begin if($bufferSelector)begin ${action(1)} end else begin ${action(0)} end end"
+          }.mkString
+          s"case($bankExpression)$cases default:begin end endcase"
+      }
+      if lanes.forall(_.nonEmpty) then Some(lanes.flatten.mkString("\n")) else None
+    val captureLogic = compactStreamPorts(plan.inputAddresses,"capture_count","capture_buffer",true)
+      .getOrElse(s"case(capture_count)$captureCases default:begin end endcase")
+    val outputValueLogic = compactStreamPorts(plan.outputAddresses,"output_count","output_buffer",false,true)
+      .getOrElse(s"case(output_count)$outputValueCases default:begin end endcase")
+    val outputCurrentReadLogic = compactStreamPorts(plan.outputAddresses,"output_count","output_buffer",false)
+      .getOrElse(s"case(output_count)$outputCurrentReadCases default:begin end endcase")
+    val outputNextReadLogic = compactStreamPorts(plan.outputAddresses,"output_count+1","output_buffer",false)
+      .getOrElse(s"case(output_count)$outputNextReadCases default:begin end endcase")
 
     val maxButterflySteps = radixLog * radix / 2
     val networkTemplate = schedule.bundles.flatMap(_.operations).find(_.kind == PeOperationKind.Dense).map(_.steps).getOrElse(Vector.empty)
@@ -411,11 +440,11 @@ object PeStreamingNttSystemVerilog:
     val outputReadGuard = if protocol == StreamProtocol.NextPulse then "" else "&&!out_valid"
     val outputAdvance = protocol match
       case StreamProtocol.NextPulse =>
-        s"""case(output_count)$outputValueCases default:begin end endcase
+        s"""$outputValueLogic
            |          if(output_count==0)next_out<=1;
            |          if(output_count==STREAM_CYCLES-1)begin output_active<=0;output_prefetched<=0;output_count<=0;if(output_buffer)buffer_1_state<=EMPTY;else buffer_0_state<=EMPTY;end else output_count<=output_count+1;""".stripMargin
       case StreamProtocol.ReadyValid =>
-        s"""if(!out_valid)begin case(output_count)$outputValueCases default:begin end endcase out_valid<=1;end
+        s"""if(!out_valid)begin $outputValueLogic out_valid<=1;end
            |          else if(out_ready)begin out_valid<=0;if(output_count==STREAM_CYCLES-1)begin output_active<=0;output_prefetched<=0;output_count<=0;if(output_buffer)buffer_1_state<=EMPTY;else buffer_0_state<=EMPTY;end else output_count<=output_count+1;end""".stripMargin
     s"""// Generated by NGen's reusable-PE banked streaming backend.
        |/* verilator lint_off DECLFILENAME */
@@ -449,11 +478,11 @@ object PeStreamingNttSystemVerilog:
        |    $portDefaults
        |    if(!capture_active)begin
        |      if($firstInputAccepted)begin if(buffer_0_state==EMPTY)begin ${captureWrites(0,0)} end else begin ${captureWrites(1,0)} end end
-       |    end else if($continuingInputAccepted)begin case(capture_count)$captureCases default:begin end endcase end
+       |    end else if($continuingInputAccepted)begin $captureLogic end
        |    $executionPorts
        |    if(output_active)begin
-       |      if(!output_prefetched)begin case(output_count)$outputCurrentReadCases default:begin end endcase end
-       |      else if((output_count<STREAM_CYCLES-1)$outputReadGuard)begin case(output_count)$outputNextReadCases default:begin end endcase end
+       |      if(!output_prefetched)begin $outputCurrentReadLogic end
+       |      else if((output_count<STREAM_CYCLES-1)$outputReadGuard)begin $outputNextReadLogic end
        |    end
        |  end
        |  always @(posedge clock) begin
