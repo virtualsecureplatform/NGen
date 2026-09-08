@@ -152,6 +152,8 @@ object HogePipelinedSystemVerilog:
          |endmodule""".stripMargin
     }.mkString("\n")
     val workBus = Vector.tabulate(size)(i => s"assign work_bus[${i * 64}+:64]=work[$i];").mkString("\n  ")
+    // Explicit updates avoid simulator unroll limits on nonblocking array loops.
+    val stageUpdates = Vector.tabulate(size)(i => s"work[$i]<=selected_stage_bus[${i * 64}+:64];").mkString("\n")
     val stageBusDeclarations = stages.indices.map(index => s"wire [${size * 64 - 1}:0] stage_bus_$index;").mkString("\n  ")
     val stageInstances = stages.indices.map(index => s"HogePipelinedStage_$index stage_$index(work_bus,stage_bus_$index);").mkString("\n  ")
     val stageSelectCases = stages.indices.map(index => s"$index: selected_stage_bus=stage_bus_$index;").mkString(" ")
@@ -176,7 +178,7 @@ object HogePipelinedSystemVerilog:
        |  always @(posedge clock) begin
        |    if(reset) begin input_count<=0;output_count<=0;stage_index<=0;stall_count<=0;output_active<=0;executing<=0;finishing<=0;io_validout<=0;io_out<='0;$resetWork end
        |    else begin io_validout<=0;
-       |      if(executing) begin if(stall_count>0) stall_count<=stall_count-1; else begin for(j=0;j<N;j=j+1) work[j]<=selected_stage_bus[j*64+:64]; if(stage_index==${stages.size}-1) begin stage_index<=0;executing<=0;finishing<=1;end else begin stage_index<=stage_index+1;stall_count<=STEP_GAP;end end
+       |      if(executing) begin if(stall_count>0) stall_count<=stall_count-1; else begin $stageUpdates if(stage_index==${stages.size}-1) begin stage_index<=0;executing<=0;finishing<=1;end else begin stage_index<=stage_index+1;stall_count<=STEP_GAP;end end
        |      end else if(finishing) begin finishing<=0;output_active<=1;output_count<=0;
        |      end else if(output_active) begin io_validout<=1;case(output_count) $outputCases endcase if(output_count==CYCLES-1) begin output_count<=0;output_active<=0;end else output_count<=output_count+1;
        |      end else if(io_enable) begin case(input_count) $inputCases endcase if(input_count==CYCLES-1) begin input_count<=0;$initialize stage_index<=0;stall_count<=0;executing<=1;end else input_count<=input_count+1; end
