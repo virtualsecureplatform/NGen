@@ -121,8 +121,18 @@ object YataMicrocodedSystemVerilog:
       Vector.tabulate(lanes)(i => s"input [26:0] io_ntt_in_$i") ++ Vector.tabulate(lanes)(i => s"output reg [31:0] io_ntt_out_$i") ++ Vector("output reg io_ntt_validout")
     val inputDeclarations = Vector.tabulate(size)(i => s"reg [31:0] intt$i; reg signed [26:0] ntt$i;")
     val workDeclarations = Vector.tabulate(size)(i => s"reg signed [53:0] ${w(i)};")
-    val modswitchDeclarations = Vector.tabulate(size)(i => s"wire [31:0] torus$i;")
-    val modswitchInstances = Vector.tabulate(size)(i => s"YataModSwitch modswitch_$i(${w(i)},torus$i);")
+    val modswitchDeclarations = Vector.tabulate(lanes)(i => s"reg signed [53:0] torus_input_$i; wire [31:0] torus$i;")
+    val modswitchInstances = Vector.tabulate(lanes)(i => s"YataModSwitch modswitch_$i(torus_input_$i,torus$i);")
+    // Only one output vector is consumed per cycle. Share conversion hardware
+    // across temporal coefficients, keeping the same combinational operation.
+    val modswitchCases = (0 until cycles).map { cycle =>
+      val assignments = Vector.tabulate(lanes) { lane =>
+        val index = if useSwitch then cycle * lanes + lane else lane * cycles + cycle
+        s"torus_input_$lane=${w(index)};"
+      }.mkString(" ")
+      s"$cycle: begin $assignments end"
+    }.mkString("\n")
+    val modswitchMux = s"always @(*) begin ${Vector.tabulate(lanes)(i => s"torus_input_$i=0;").mkString(" ")} case(output_count) $modswitchCases endcase end"
     val laneDeclarations = Vector.tabulate(lanes)(i => s"reg [3:0] lane_kind_$i; reg signed [53:0] lane_a_$i,lane_b_$i; reg signed [26:0] lane_constant_$i; reg [1:0] lane_radix_$i,lane_number_$i; wire signed [53:0] lane_out_a_$i,lane_out_b_$i;")
     val laneDefaults = Vector.tabulate(lanes)(i => s"lane_kind_$i=0;lane_a_$i=0;lane_b_$i=0;lane_constant_$i=0;lane_radix_$i=0;lane_number_$i=0;")
     val laneInstances = Vector.tabulate(lanes)(i => s"YataMicroLane lane_$i(lane_kind_$i,lane_a_$i,lane_b_$i,lane_constant_$i,lane_radix_$i,lane_number_$i,lane_out_a_$i,lane_out_b_$i);")
@@ -138,7 +148,7 @@ object YataMicrocodedSystemVerilog:
     def outputCases(isIntt: Boolean): String = (0 until cycles).map { cycle =>
       val assignments = Vector.tabulate(lanes) { lane =>
         val index = if isIntt || useSwitch then cycle * lanes + lane else lane * cycles + cycle
-        if isIntt then s"io_intt_out_$lane<=${w(index)}[26:0];" else s"io_ntt_out_$lane<=torus$index;"
+        if isIntt then s"io_intt_out_$lane<=${w(index)}[26:0];" else s"io_ntt_out_$lane<=torus$lane;"
       }
       s"$cycle: begin\n${lines(assignments,10)}\n        end"
     }.mkString("\n")
@@ -153,6 +163,7 @@ object YataMicrocodedSystemVerilog:
        |  localparam integer I_LENGTH=${inverse.size}; localparam integer F_LENGTH=${forward.size}; localparam integer STEP_GAP=${if profile == ProfileName.F300 then 1 else 0};
        |${lines(inputDeclarations ++ workDeclarations ++ modswitchDeclarations ++ laneDeclarations ++ laneInstances ++ modswitchInstances,2)}
        |  integer pc,input_count,output_count,stall_count; reg executing,inverse_operation,finishing,output_intt,output_ntt;
+       |  $modswitchMux
        |  always @(*) begin ${lines(laneDefaults,4)} if(inverse_operation)begin case(pc)
        |${cases(inverse,setup)}
        |  endcase end else begin case(pc)
