@@ -107,7 +107,7 @@ object KyberSystemVerilog:
        |  always @(posedge clk) begin
        |    if(reset) begin
        |      dout<=0; done<=0; load_active<=0; read_active<=0; last_inverse<=0; executing<=0; finishing<=0; pc<=0; load_count<=0; read_count<=0; read_delay<=0;
-       |      for(j=0;j<256;j=j+1) begin bank_a[j]<=0; bank_b[j]<=0; work[j]<=0; end
+       |      ${Vector.tabulate(256)(j => s"bank_a[$j]<=0; bank_b[$j]<=0; work[$j]<=0;").mkString("\n")}
        |    end else begin
        |      done<=0;
        |      if(load_a_f||load_a_i||load_b_f||load_b_i) begin load_active<=1; load_count<=0; load_inverse<=load_a_i||load_b_i; load_bank_b<=load_b_f||load_b_i; end
@@ -117,7 +117,7 @@ object KyberSystemVerilog:
        |        if(load_count==255) begin load_active<=0; load_count<=0; end else load_count<=load_count+1;
        |      end
        |      if(start_fntt||start_intt) begin
-       |        for(j=0;j<256;j=j+1) work[j]<=start_ab?bank_b[j]:bank_a[j];
+       |        ${Vector.tabulate(256)(j => s"work[$j]<=start_ab?bank_b[$j]:bank_a[$j];").mkString("\n")}
        |        operation_inverse<=start_intt; operation_bank_b<=start_ab; last_inverse<=start_intt; pc<=0; executing<=1;
        |      end else if(executing) begin
        |        if(operation_inverse) begin
@@ -132,7 +132,7 @@ object KyberSystemVerilog:
        |          work[f_right[pc]]<=kyber_sub(work[f_left[pc]],kyber_mul(work[f_right[pc]],f_constant[pc]));
        |          if(pc==FORWARD_LENGTH-1) begin pc<=0; executing<=0; finishing<=1; end else pc<=pc+1;
        |        end
-       |      end else if(finishing) begin for(j=0;j<256;j=j+1) if(operation_bank_b) bank_b[j]<=work[j]; else bank_a[j]<=work[j]; finishing<=0; done<=1; end
+       |      end else if(finishing) begin ${Vector.tabulate(256)(j => s"if(operation_bank_b) bank_b[$j]<=work[$j]; else bank_a[$j]<=work[$j];").mkString("\n")} finishing<=0; done<=1; end
        |      if(read_a||read_b) begin read_active<=1; read_count<=0; read_delay<=2; read_bank_b<=read_b; read_inverse<=last_inverse; end
        |      else if(read_active) begin
        |        if(read_delay>0) begin read_delay<=read_delay-1; if(read_delay==1) begin logical_index=read_inverse?(read_count[0]?128+(read_count>>1):(read_count>>1)):((read_count>>2)*4+(read_count[1:0]==1?2:(read_count[1:0]==2?1:read_count[1:0]))); dout<=read_bank_b?bank_b[logical_index]:bank_a[logical_index]; end end
