@@ -343,11 +343,21 @@ object PeStreamingNttSystemVerilog:
         case name if name.startsWith("post_") =>
           val parts=name.split("_");s"${prefix}post_${parts(1)}_${pe}_${parts(2)}"
       s"$declaration $signalName=$source$range;"
+    // A next-address prefetch hides the synchronous control-ROM read. While
+    // inactive fetch record zero; on each issue fetch the next record and hold
+    // it through stage drains. No issue or arithmetic latency changes.
+    val blockControl = radix == 2 && !runtimeControl && schedule.bundles.size >= 1024
+    val controlPrefetch = if blockControl then (0 until peCount).map { pe =>
+      s"if(!exec_active||(issue_fire&&bundle_index<BUNDLE_COUNT-1))control_$pe<=control_${pe}_rom[!exec_active?0:bundle_index+1];"
+    }.mkString else ""
     val romDeclarations = (0 until peCount).map { pe =>
       val issueAliases = controlFields.map(field => alias(pe,field,s"control_$pe","")).mkString
       val loadAliases = if radix == 2 then controlFields.map(field => alias(pe,field,s"issued_control_$pe","load_")).mkString else ""
       val retireAliases = if radix == 2 then controlFields.map(field => alias(pe,field,s"retired_control_$pe","retire_")).mkString else ""
-      s"(* rom_style = \"distributed\" *) reg [${controlWidth - 1}:0] control_${pe}_rom[0:BUNDLE_COUNT-1];wire [${controlWidth - 1}:0] control_$pe=control_${pe}_rom[bundle_index];$issueAliases$loadAliases$retireAliases"
+      val storage = if blockControl then "block" else "distributed"
+      val read = if blockControl then s"reg [${controlWidth - 1}:0] control_$pe;"
+        else s"wire [${controlWidth - 1}:0] control_$pe=control_${pe}_rom[bundle_index];"
+      s"(* rom_style = \"$storage\" *) reg [${controlWidth - 1}:0] control_${pe}_rom[0:BUNDLE_COUNT-1];$read$issueAliases$loadAliases$retireAliases"
     }.mkString("\n  ")
     val romInitializers = schedule.bundles.zipWithIndex.flatMap { case (bundle,bundleIndex) =>
       (0 until peCount).map { pe =>
@@ -488,6 +498,7 @@ object PeStreamingNttSystemVerilog:
        |  always @(posedge clock) begin
        |    $memoryPorts
        |    $runtimeControlWrite
+       |    $controlPrefetch
        |  end
        |  always @(posedge clock) begin
        |    if(reset)begin buffer_0_state<=EMPTY;buffer_1_state<=EMPTY;capture_active<=0;exec_active<=0;output_active<=0;output_prefetched<=0;capture_count<=0;bundle_index<=0;gap_count<=0;output_count<=0;exec_phase<=0;$pipelineReset$resetProtocol$resetOutputs end

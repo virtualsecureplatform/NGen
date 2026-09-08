@@ -69,3 +69,13 @@ class PeStreamingNttSystemVerilogSpec extends AnyFunSuite:
     assert(rtl.contains("input config_control_we"))
     assert(rtl.contains("config_control_address"))
     assert(rtl.contains("control_0_rom[config_control_address]<=config_control_data"))
+
+  test("large static radix-2 schedules prefetch synchronous block control ROMs"):
+    val large = NttDomain("q12289", 1024, Modulus(12289), 10302, TransformShape.Cyclic)
+    val schedule = PeNttSchedule.build(NttPlan.radix2(large, inverse = false), 1, 2, 4)
+    val rtl = PeStreamingNttSystemVerilog.emit(schedule, 4, "BlockControl", ProfileName.Baseline, ReductionKind.Montgomery)
+    assert(rtl.contains("rom_style = \"block\""))
+    assert(rtl.contains("control_0_rom[!exec_active?0:bundle_index+1]"))
+    assert(!rtl.contains("control_0=control_0_rom[bundle_index]"))
+    val programmable = PeStreamingNttSystemVerilog.emit(schedule, 4, "WritableControl", ProfileName.Baseline, ReductionKind.Montgomery, runtimeControl = true)
+    assert(programmable.contains("rom_style = \"distributed\""))
