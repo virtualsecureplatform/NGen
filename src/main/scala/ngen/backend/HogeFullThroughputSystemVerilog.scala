@@ -66,9 +66,9 @@ object HogeFullThroughputSystemVerilog:
       |  reg [63:0] epsilon5,epsilon6,base6,corrected8,result9;
       |  assign valid_out=valid_pipe[8];assign result=result9;
       |  always @(posedge clock) begin
-      |    if(reset) begin valid_pipe<=0;a1<=0;b1<=0;p00<=0;p01<=0;p10<=0;p11<=0;sum3<=0;upper3<=0;product4<=0;difference5<=0;epsilon5<=0;epsilon6<=0;base6<=0;sum7<=0;corrected8<=0;result9<=0;end
-      |    else begin
-      |      valid_pipe<={valid_pipe[7:0],valid_in};a1<=a;b1<=factor;
+      |    // A cleared valid pipeline discards all pre-reset arithmetic contents.
+      |    if(reset)valid_pipe<=0;else valid_pipe<={valid_pipe[7:0],valid_in};
+      |      a1<=a;b1<=factor;
       |      p00<=a1[31:0]*b1[31:0];p01<=a1[31:0]*b1[63:32];p10<=a1[63:32]*b1[31:0];p11<=a1[63:32]*b1[63:32];
       |      sum3<={64'd0,p00}+{32'd0,p01,32'd0};upper3<={p11,64'd0}+{32'd0,p10,32'd0};
       |      product4<=sum3+upper3;
@@ -77,7 +77,6 @@ object HogeFullThroughputSystemVerilog:
       |      sum7<={1'b0,base6}+{1'b0,epsilon6};
       |      corrected8<=sum7[64]?sum7[63:0]+EPS:sum7[63:0];
       |      result9<=corrected8>=P?corrected8+EPS:corrected8;
-      |    end
       |  end
       |endmodule
       |""".stripMargin

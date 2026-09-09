@@ -2,6 +2,7 @@ package ngen.backend
 
 /** Registered Goldilocks shift/reduction and butterflies, with fixed II one.
   * Every operand and valid token crosses the same number of stage boundaries.
+  * Reset clears validity; invalid arithmetic contents need no reset distribution.
   */
 object HogeRadixPipeline:
   val ShiftDepth = 7
@@ -17,9 +18,7 @@ object HogeRadixPipeline:
       |  reg[31:0]hi1;reg[64:0]difference2,sum4;
       |  assign valid_out=valid_pipe[6];assign result=result7;
       |  always @(posedge clock)begin
-      |    if(reset)begin valid_pipe<=0;lo1<=0;negative1<=0;hi1<=0;difference2<=0;epsilon2<=0;epsilon3<=0;base3<=0;sum4<=0;corrected5<=0;canonical6<=0;result7<=0;end
-      |    else begin
-      |      valid_pipe<={valid_pipe[5:0],valid_in};
+      |    if(reset)valid_pipe<=0;else valid_pipe<={valid_pipe[5:0],valid_in};
       |      if(AMOUNT<64)begin lo1<=a<<AMOUNT;hi1<=a>>(64-AMOUNT);negative1<=AMOUNT<32?64'd0:a>>(96-AMOUNT);end
       |      else begin lo1<=0;hi1<=a<<(AMOUNT-64);negative1<=a>>(96-AMOUNT);end
       |      difference2<={1'b0,lo1}-{1'b0,negative1};epsilon2<={hi1,32'd0}-{32'd0,hi1};
@@ -28,7 +27,6 @@ object HogeRadixPipeline:
       |      corrected5<=sum4[64]?sum4[63:0]+EPS:sum4[63:0];
       |      canonical6<=corrected5>=P?corrected5+EPS:corrected5;
       |      result7<=EXP%192>=96?(canonical6==0?64'd0:P-canonical6):canonical6;
-      |    end
       |  end
       |endmodule
       |module HogeButterflyPipeline(input clock,input reset,input valid_in,input[63:0]a,b,output valid_out,output reg[63:0]sum,difference);
@@ -36,9 +34,9 @@ object HogeRadixPipeline:
       |  reg[1:0]valid_pipe;reg[64:0]s1,d1;
       |  assign valid_out=valid_pipe[1];
       |  always @(posedge clock)begin
-      |    if(reset)begin valid_pipe<=0;s1<=0;d1<=0;sum<=0;difference<=0;end
-      |    else begin valid_pipe<={valid_pipe[0],valid_in};s1<={1'b0,a}+{1'b0,b};d1<={1'b0,a}-{1'b0,b};
-      |      sum<=s1[64]||s1[63:0]>=P?s1[63:0]+EPS:s1[63:0];difference<=d1[64]?d1[63:0]-EPS:d1[63:0];end
+      |    if(reset)valid_pipe<=0;else valid_pipe<={valid_pipe[0],valid_in};
+      |    s1<={1'b0,a}+{1'b0,b};d1<={1'b0,a}-{1'b0,b};
+      |      sum<=s1[64]||s1[63:0]>=P?s1[63:0]+EPS:s1[63:0];difference<=d1[64]?d1[63:0]-EPS:d1[63:0];
       |  end
       |endmodule
       |""".stripMargin
