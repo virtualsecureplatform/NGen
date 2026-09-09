@@ -6,7 +6,7 @@ object SwitchTransposeSystemVerilog:
   private def unitName(prefix: String, bits: Int): String = s"${prefix}NGenSwitchTransposeUnit_$bits"
   private def networkName(prefix: String, bits: Int): String = s"${prefix}NGenSwitchTransposeNetwork_$bits"
 
-  private def unit(bits: Int, dataWidth: Int, prefix: String = ""): String =
+  private def unit(bits: Int, dataWidth: Int, prefix: String = "", resetData: Boolean = true): String =
     val width = 1 << bits
     val half = width / 2
     def upper(lane: Int, stage: Int) = s"upper_${lane}_$stage"
@@ -30,6 +30,11 @@ object SwitchTransposeSystemVerilog:
         s"${lower(lane,stage)} <= ${lower(lane,stage-1)};"
       ))
     }.mkString("\n      ")
+    // Validity and phase discard aborted work. HOGE can leave invalid delay
+    // contents unreset to avoid distributing reset across the wide datapath.
+    val dataBeforeControl = if resetData then "" else s"\n      $shiftPipes"
+    val dataOnReset = if resetData then s"\n      $resetPipes" else ""
+    val dataAfterReset = if resetData then s"\n      $shiftPipes" else ""
     // Each unit delays validity by half a frame, just like its data paths.
     // Track input phase independently so even a one-cycle inter-frame gap is
     // preserved while the previous frame is still draining downstream.
@@ -46,11 +51,9 @@ object SwitchTransposeSystemVerilog:
        |  assign valid_out = valid_delay[${half - 1}];
        |  $registers
        |  $outputs
-       |  always @(posedge clock) begin
-       |    if (reset) begin phase <= '0; valid_delay <= '0;
-       |      $resetPipes
-       |    end else begin
-       |      $shiftPipes
+       |  always @(posedge clock) begin$dataBeforeControl
+       |    if (reset) begin phase <= '0; valid_delay <= '0;$dataOnReset
+       |    end else begin$dataAfterReset
        |      if (valid_in) phase <= phase + 1'b1;
        |      else phase <= '0;
        |      $validShift
@@ -78,10 +81,10 @@ object SwitchTransposeSystemVerilog:
          |endmodule
          |""".stripMargin
 
-  def definitions(spec: SwitchTransposeSpec, prefix: String = ""): String =
+  def definitions(spec: SwitchTransposeSpec, prefix: String = "", resetData: Boolean = true): String =
     require(prefix.matches("[A-Za-z_][A-Za-z0-9_]*") || prefix.isEmpty, s"invalid switch-transpose prefix '$prefix'")
     require(spec.square, "recursive switch-unit definitions require a square lane/time sub-network")
-    (1 to spec.logSize).map(bits => unit(bits,spec.dataWidth,prefix) + network(bits,spec.dataWidth,prefix)).mkString("\n")
+    (1 to spec.logSize).map(bits => unit(bits,spec.dataWidth,prefix,resetData) + network(bits,spec.dataWidth,prefix)).mkString("\n")
 
   private def rectangular(spec: SwitchTransposeSpec, top: String, fixedRate: Boolean, ratePreserving: Boolean): String =
     val inBits = spec.inputLanes * spec.dataWidth
