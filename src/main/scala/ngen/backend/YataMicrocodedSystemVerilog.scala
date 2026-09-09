@@ -84,7 +84,7 @@ object YataMicrocodedSystemVerilog:
 
   def scheduleLengths(logSize: Int, streamingLog: Int, profile: ProfileName): (Int, Int) =
     val tables = YataField.tables(logSize)
-    val factor = if profile == ProfileName.F300 then 2 else 1
+    val factor = if profile == ProfileName.F300 then YataMicroLanePipeline.IssueCycles else 1
     (MicroProgram.schedule(inverseProgram(logSize, tables), 1 << streamingLog).length * factor,
       MicroProgram.schedule(forwardProgram(logSize, tables), 1 << streamingLog).length * factor)
 
@@ -99,8 +99,8 @@ object YataMicrocodedSystemVerilog:
     val tables = YataField.tables(logSize)
     val inverse = MicroProgram.schedule(inverseProgram(logSize, tables), lanes).bundles
     val forward = MicroProgram.schedule(forwardProgram(logSize, tables), lanes).bundles
-    require(inverse.size * (if profile == ProfileName.F300 then 2 else 1) < 1900)
-    require(forward.size * (if profile == ProfileName.F300 then 2 else 1) < 1900)
+    require(inverse.size < 1900)
+    require(forward.size < 1900)
     def w(index: Int) = s"w$index"
     def setup(op: MicroOp, lane: Int): Vector[String] = Vector(
       s"lane_kind_$lane=4'd${op.kind};",
@@ -135,7 +135,7 @@ object YataMicrocodedSystemVerilog:
     val modswitchMux = s"always @(*) begin ${Vector.tabulate(lanes)(i => s"torus_input_$i=0;").mkString(" ")} case(output_count) $modswitchCases endcase end"
     val laneDeclarations = Vector.tabulate(lanes)(i => s"reg [3:0] lane_kind_$i; reg signed [53:0] lane_a_$i,lane_b_$i; reg signed [26:0] lane_constant_$i; reg [1:0] lane_radix_$i,lane_number_$i; wire signed [53:0] lane_out_a_$i,lane_out_b_$i;")
     val laneDefaults = Vector.tabulate(lanes)(i => s"lane_kind_$i=0;lane_a_$i=0;lane_b_$i=0;lane_constant_$i=0;lane_radix_$i=0;lane_number_$i=0;")
-    val laneInstances = Vector.tabulate(lanes)(i => s"YataMicroLane lane_$i(lane_kind_$i,lane_a_$i,lane_b_$i,lane_constant_$i,lane_radix_$i,lane_number_$i,lane_out_a_$i,lane_out_b_$i);")
+    val laneInstances = Vector.tabulate(lanes)(i => s"${if profile == ProfileName.F300 then "YataMicroLanePipeline" else "YataMicroLane"} lane_$i(${if profile == ProfileName.F300 then "clock," else ""}lane_kind_$i,lane_a_$i,lane_b_$i,lane_constant_$i,lane_radix_$i,lane_number_$i,lane_out_a_$i,lane_out_b_$i);")
     val initializeI = Vector.tabulate(size)(i => s"${w(i)}<={{27{1'b0}},intt$i[26:0]};")
     val initializeN = Vector.tabulate(size)(i => s"${w(i)}<={{27{ntt$i[26]}},ntt$i};")
     def inputCases(isIntt: Boolean): String = (0 until cycles).map { cycle =>
@@ -160,7 +160,7 @@ object YataMicrocodedSystemVerilog:
        |module $moduleName(
        |${ports.map("  " + _).mkString(",\n")}
        |);
-       |  localparam integer I_LENGTH=${inverse.size}; localparam integer F_LENGTH=${forward.size}; localparam integer STEP_GAP=${if profile == ProfileName.F300 then 1 else 0};
+       |  localparam integer I_LENGTH=${inverse.size}; localparam integer F_LENGTH=${forward.size}; localparam integer STEP_GAP=${if profile == ProfileName.F300 then YataMicroLanePipeline.IssueCycles - 1 else 0};
        |${lines(inputDeclarations ++ workDeclarations ++ modswitchDeclarations ++ laneDeclarations ++ laneInstances ++ modswitchInstances,2)}
        |  integer pc,input_count,output_count,stall_count; reg executing,inverse_operation,finishing,output_intt,output_ntt;
        |  $modswitchMux
@@ -181,8 +181,8 @@ object YataMicrocodedSystemVerilog:
        |      end else if(finishing)begin finishing<=0;if(inverse_operation)output_intt<=1;else output_ntt<=1;output_count<=0;
        |      end else if(output_intt)begin io_intt_validout<=1;case(output_count) ${outputCases(true)} endcase if(output_count==$cycles-1)begin output_intt<=0;output_count<=0;end else output_count<=output_count+1;
        |      end else if(output_ntt)begin io_ntt_validout<=1;case(output_count) ${outputCases(false)} endcase if(output_count==$cycles-1)begin output_ntt<=0;output_count<=0;end else output_count<=output_count+1;
-       |      end else if(io_intt_validin)begin case(input_count) ${inputCases(true)} endcase if(input_count==$cycles-1)begin input_count<=0;${lines(initializeI,8)} inverse_operation<=1;pc<=0;stall_count<=0;executing<=1;end else input_count<=input_count+1;
-       |      end else if(io_ntt_validin)begin case(input_count) ${inputCases(false)} endcase if(input_count==$cycles-1)begin input_count<=0;${lines(initializeN,8)} inverse_operation<=0;pc<=0;stall_count<=0;executing<=1;end else input_count<=input_count+1; end
+       |      end else if(io_intt_validin)begin case(input_count) ${inputCases(true)} endcase if(input_count==$cycles-1)begin input_count<=0;${lines(initializeI,8)} inverse_operation<=1;pc<=0;stall_count<=STEP_GAP;executing<=1;end else input_count<=input_count+1;
+       |      end else if(io_ntt_validin)begin case(input_count) ${inputCases(false)} endcase if(input_count==$cycles-1)begin input_count<=0;${lines(initializeN,8)} inverse_operation<=0;pc<=0;stall_count<=STEP_GAP;executing<=1;end else input_count<=input_count+1; end
        |    end
        |  end
        |endmodule
@@ -212,7 +212,8 @@ object YataMicrocodedSystemVerilog:
        |/* verilator lint_on UNUSEDSIGNAL */
        |/* verilator lint_on BLKSEQ */
        |""".stripMargin
-    if useSwitch then core + "\n" + switchWrapper(top, moduleName, lanes, cycles) else core
+    val pipelinedCore = core + (if profile == ProfileName.F300 then "\n" + YataMicroLanePipeline.definition else "")
+    if useSwitch then pipelinedCore + "\n" + switchWrapper(top, moduleName, lanes, cycles) else pipelinedCore
 
   private def switchWrapper(top: String, coreName: String, lanes: Int, cycles: Int): String =
     val bits = Integer.numberOfTrailingZeros(cycles)

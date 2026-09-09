@@ -24,7 +24,7 @@ class YataSystemVerilogSpec extends AnyFunSuite:
     val large = YataMicrocodedSystemVerilog.emit(9, 6, ProfileName.F300, "YataRainttTop")
     assert(small.contains("I_LENGTH="))
     assert(medium.contains("localparam integer STEP_GAP=0"))
-    assert(large.contains("localparam integer STEP_GAP=1"))
+    assert(large.contains("localparam integer STEP_GAP=7"))
     assert(large.contains("io_intt_in_63"))
 
   test("switch transpose backend wraps the natural-order YATA core"):

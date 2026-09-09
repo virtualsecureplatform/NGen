@@ -220,7 +220,7 @@ object Main:
         else HogeSystemVerilog.emitStreamingNtt(top, config.profile, config.transpose)
       Files.writeString(output, rtl)
       val bundles =
-        if useFullThroughput then HogeFullThroughputSystemVerilog.RadixPipelineDepth * 2 + (if inverse then 31 else 62)
+        if useFullThroughput then HogeFullThroughputSystemVerilog.RadixPipelineDepth * 2 + (HogeFullThroughputSystemVerilog.FactorPipelineDepth + 31) * (if inverse then 1 else 2)
         else if usePipelined then
           val (inverseStages, forwardStages) = HogePipelinedSystemVerilog.stageCounts(10, 5)
           val stageCount = if inverse then inverseStages else forwardStages
@@ -230,7 +230,7 @@ object Main:
         case ngen.rtl.TransposeKind.Indexed => 0
         case ngen.rtl.TransposeKind.Switch => 31
         case ngen.rtl.TransposeKind.Distributed => 47
-      val maxWaitCycles = if useFullThroughput then (if inverse then 9 else 40) else bundles + 2 + switchOverhead
+      val maxWaitCycles = if useFullThroughput then (if inverse then 9 else 40) + HogeFullThroughputSystemVerilog.FactorPipelineDepth * (if inverse then 1 else 2) else bundles + 2 + switchOverhead
       writePresetArtifacts(config, output, "Goldilocks", 32, 32, maxWaitCycles,
         if useFullThroughput then 32 else bundles,
         Some(if useFullThroughput then "hoge-full-throughput-recursive-radix32"
