@@ -185,7 +185,9 @@ object Main:
         if config.transpose != ngen.rtl.TransposeKind.Switch || cycles == 1 then 0
         else if config.streamingWidth == cycles then cycles - 1
         else 2 * cycles - 1
-      val yataWait = if useFullThroughput then YataFullThroughputSystemVerilog.pipelineDepth(config.domain.logSize) else schedule._1.max(schedule._2) + 2 + switchOverhead
+      val inputSwitchOverhead = if config.transpose == ngen.rtl.TransposeKind.Switch && cycles > 1 then cycles - 1 else 0
+      val outputExtra = if !useFullThroughput && !usePipelined && config.profile == ProfileName.F300 then ngen.backend.YataMicroLanePipeline.OutputExtraCycles else 0
+      val yataWait = if useFullThroughput then YataFullThroughputSystemVerilog.pipelineDepth(config.domain.logSize) else (schedule._1 + 2 + inputSwitchOverhead).max(schedule._2 + 2 + switchOverhead + outputExtra)
       writePresetArtifacts(config, output, "YataSredc", cycles, cycles, yataWait,
         if useFullThroughput then cycles else schedule._1.max(schedule._2),
         Some(if useFullThroughput then "yata-full-throughput-recursive-radix8" else if usePipelined then "yata-stage-parallel-radix8" else "yata-microcoded-radix8"))
@@ -220,7 +222,7 @@ object Main:
         else HogeSystemVerilog.emitStreamingNtt(top, config.profile, config.transpose)
       Files.writeString(output, rtl)
       val bundles =
-        if useFullThroughput then HogeFullThroughputSystemVerilog.RadixPipelineDepth * 2 + (HogeFullThroughputSystemVerilog.FactorPipelineDepth + 31) * (if inverse then 1 else 2)
+        if useFullThroughput then (HogeFullThroughputSystemVerilog.RadixPipelineDepth + (if inverse then HogeFullThroughputSystemVerilog.FormerRadixPipelineDepth else HogeFullThroughputSystemVerilog.RadixPipelineDepth)) + (HogeFullThroughputSystemVerilog.FactorPipelineDepth + 31) * (if inverse then 1 else 2)
         else if usePipelined then
           val (inverseStages, forwardStages) = HogePipelinedSystemVerilog.stageCounts(10, 5)
           val stageCount = if inverse then inverseStages else forwardStages
@@ -230,7 +232,7 @@ object Main:
         case ngen.rtl.TransposeKind.Indexed => 0
         case ngen.rtl.TransposeKind.Switch => 31
         case ngen.rtl.TransposeKind.Distributed => 47
-      val maxWaitCycles = if useFullThroughput then (if inverse then 9 else 40) + HogeFullThroughputSystemVerilog.FactorPipelineDepth * (if inverse then 1 else 2) else bundles + 2 + switchOverhead
+      val maxWaitCycles = if useFullThroughput then bundles - 32 else bundles + 2 + switchOverhead
       writePresetArtifacts(config, output, "Goldilocks", 32, 32, maxWaitCycles,
         if useFullThroughput then 32 else bundles,
         Some(if useFullThroughput then "hoge-full-throughput-recursive-radix32"

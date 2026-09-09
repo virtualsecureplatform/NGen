@@ -50,3 +50,24 @@ object YataMicroLanePipeline:
       |  end
       |endmodule
       |""".stripMargin
+
+  val OutputExtraCycles = 3
+  val outputConversion: String =
+    """module YataModSwitchPipeline(input clock,input reset,input valid_in,input signed[53:0]value,output valid_out,output[31:0]torus);
+      |  localparam[32:0]SCALE=33'd7036874245;
+      |  wire signed[26:0]residue=value[26:0];
+      |  reg[3:0]valid_pipe;reg[57:0]positive1,lo2,product3,rounded4;reg[25:0]hi2;
+      |  assign valid_out=valid_pipe[3];assign torus=rounded4[57:26];
+      |  // Only product bits 57:26 affect the 32-bit torus output. Truncation
+      |  // modulo 2^58 preserves even negative intermediate representations.
+      |  always @(posedge clock)begin
+      |    if(reset)begin valid_pipe<=0;positive1<=0;lo2<=0;hi2<=0;product3<=0;rounded4<=0;end
+      |    else begin
+      |      valid_pipe<={valid_pipe[2:0],valid_in};
+      |      positive1<=residue<0?$signed(residue)+58'sd40960001:$signed(residue);
+      |      lo2<=positive1[31:0]*SCALE;hi2<=positive1[57:32]*SCALE;
+      |      product3<=lo2+{hi2,32'd0};rounded4<=product3+58'd33554432;
+      |    end
+      |  end
+      |endmodule
+      |""".stripMargin

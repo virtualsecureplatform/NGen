@@ -8,7 +8,7 @@ class HogeFullThroughputSystemVerilogSpec extends AnyFunSuite:
   test("full-throughput HOGE is a recursive two-pass switch pipeline"):
     val rtl = HogeFullThroughputSystemVerilog.emit("HogeFT", false, ProfileName.Baseline, TransposeKind.Switch)
     assert(HogeFullThroughputSystemVerilog.StreamCycles == 32)
-    assert(HogeFullThroughputSystemVerilog.RadixPipelineDepth == 5)
+    assert(HogeFullThroughputSystemVerilog.RadixPipelineDepth == 45)
     assert(rtl.contains("module HogeForwardRadix32Pipeline"))
     assert(rtl.contains("HogeFTNGenSwitchTransposeNetwork_5 transpose1"))
     assert(rtl.contains("HogeFTNGenSwitchTransposeNetwork_5 transpose2"))

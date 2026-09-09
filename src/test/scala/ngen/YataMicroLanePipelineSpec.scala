@@ -34,3 +34,32 @@ class YataMicroLanePipelineSpec extends AnyFunSuite:
     val old = YataMicrocodedSystemVerilog.scheduleLengths(6,3,ProfileName.Baseline)
     val pipelined = YataMicrocodedSystemVerilog.scheduleLengths(6,3,ProfileName.F300)
     assert(pipelined == (old._1*8,old._2*8))
+
+  test("registered output conversion preserves rounded torus words, bubbles and reset"):
+    import java.nio.file.Files
+    import scala.sys.process.*
+    val random=new scala.util.Random(0x544f5255)
+    val boundary=Vector(0L,1L,-1L,40960000L,-40960000L,67108863L,-67108864L)
+    var pending=Vector.fill[Option[BigInt]](3)(None)
+    val checks=(0 until 300).map { cycle =>
+      val value=if cycle<boundary.size then boundary(cycle) else random.nextInt(1<<27).toLong-(1L<<26)
+      val positive=if value<0 then value+40960001L else value
+      val expectedWord=((BigInt(positive)*BigInt("7036874245")+(BigInt(1)<<25))>>26)&((BigInt(1)<<32)-1)
+      val reset=cycle==0 || cycle==78 || cycle==139
+      val valid=cycle%7!=3
+      val expected=if reset then
+        pending=Vector.fill(3)(None);None
+      else
+        val queue=pending :+ (if valid then Some(expectedWord) else None)
+        pending=queue.tail;queue.head
+      val assertion=expected match
+        case Some(word)=>s"if(!valid_out || torus!==32'h${word.toString(16)}) $$fatal(1,\"torus cycle $cycle\");"
+        case None=>s"if(valid_out) $$fatal(1,\"unexpected torus valid cycle $cycle\");"
+      val literal=if value<0 then s"-54'sd${-value}" else s"54'sd$value"
+      s"@(negedge clock);reset=${if reset then 1 else 0};valid_in=${if valid then 1 else 0};value=$literal;@(posedge clock);#1;$assertion"
+    }.mkString("\n")
+    val directory=Files.createTempDirectory("ngen-yata-output-pipeline")
+    val tb=s"module test;reg clock=0,reset=1,valid_in=0;reg signed[53:0]value=0;wire valid_out;wire[31:0]torus;always #5 clock=~clock;YataModSwitchPipeline dut(clock,reset,valid_in,value,valid_out,torus);initial begin $checks $$finish;end endmodule"
+    Files.writeString(directory.resolve("test.sv"),YataMicroLanePipeline.outputConversion+tb)
+    assert(Process(Seq("iverilog","-g2012","-s","test","-o","sim","test.sv"),directory.toFile).! == 0)
+    assert(Process(Seq("vvp","sim"),directory.toFile).! == 0)
