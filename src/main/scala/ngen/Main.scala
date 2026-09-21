@@ -6,6 +6,7 @@ import ngen.transform.ReferenceNtt
 import ngen.backend.YataMicrocodedSystemVerilog
 import ngen.backend.YataPipelinedSystemVerilog
 import ngen.backend.YataFullThroughputSystemVerilog
+import ngen.backend.YataStreamingSystemVerilog
 import ngen.backend.{DesignMetadata, GraphSystemVerilog, TransformDot}
 import ngen.backend.HogeSystemVerilog
 import ngen.backend.HogePipelinedSystemVerilog
@@ -138,6 +139,26 @@ object Main:
       require(config.reduction == ReductionChoice.Auto, "preset backends select their field reduction automatically")
       require(config.inputOrder == DataOrder.Natural && config.outputOrder == DataOrder.Natural,
         "preset backends currently expose natural-order streams only")
+    if config.domain.name == "yata512" && config.direction != Direction.Both then
+      require(effectivePresetBackend == PresetBackend.FullThroughput,
+        "fixed-direction YATA512 requires -architecture full-throughput")
+      require(config.streamingLog == 6 && config.radixLog == 3,
+        "fixed-direction YATA512 requires -k 6 -r 3")
+      require(config.protocol == StreamProtocol.NextPulse,
+        "fixed-direction YATA512 is a fixed-rate frame pipeline; buffer frames externally")
+      require(config.transpose == ngen.rtl.TransposeKind.Switch,
+        "fixed-direction YATA512 requires -transpose switch")
+      val inverse = config.direction == Direction.Inverse
+      val top = config.top.getOrElse(if inverse then "YataDecompositionTransform" else "YataReconstructionTransform")
+      val design = YataStreamingSystemVerilog.emit(top,inverse)
+      val output = Path.of(config.output.getOrElse(top+".sv"))
+      Option(output.getParent).foreach(Files.createDirectories(_))
+      Files.writeString(output,design.source)
+      writePresetArtifacts(config,output,"YataSredc",8,8,design.latency,8,Some("yata-fixed-direction-full-throughput-radix8"))
+      val contract = s"""{"schema":"yata-stream-v1","top":"$top","latency":${design.latency},"frame_beats":8,"lanes":64,"input_bits":${if inverse then 32 else 27},"output_bits":${if inverse then 27 else 32},"input_index":"${if inverse then "lane*8+cycle" else "cycle*64+lane"}","output_index":"${if inverse then "cycle*64+lane" else "lane*8+cycle"}","intra_frame_bubbles":false,"backpressure":false}"""
+      Files.writeString(Path.of(artifactBase(output)+".stream.json"),contract+"\n")
+      println(s"Written design in $output.")
+      return true
     if config.direction == Direction.Both then
       if config.domain.name == "kyber256" then
         require(config.protocol == StreamProtocol.NextPulse, "Kyber preset currently uses the next-pulse protocol")

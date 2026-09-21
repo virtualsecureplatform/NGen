@@ -52,6 +52,11 @@ object YataMicroLanePipeline:
       |""".stripMargin
 
   val OutputExtraCycles = 3
+  // Fixed-direction YATA qualifies every output with valid_pipe. Keeping
+  // invalid payload unreset avoids thousands of reset/enable loads.
+  def outputConversionUnreset: String = outputConversion
+    .replace("if(reset)begin valid_pipe<=0;positive1<=0;lo2<=0;hi2<=0;product3<=0;rounded4<=0;end\n    else begin\n      valid_pipe<={valid_pipe[2:0],valid_in};",
+      "if(reset) valid_pipe<=0; else valid_pipe<={valid_pipe[2:0],valid_in};\n    begin")
   val outputConversion: String =
     """module YataModSwitchPipeline(input clock,input reset,input valid_in,input signed[53:0]value,output valid_out,output[31:0]torus);
       |  localparam[32:0]SCALE=33'd7036874245;
