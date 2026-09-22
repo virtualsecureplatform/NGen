@@ -10,15 +10,20 @@ object GraphSystemVerilog:
     val signed = if format.signed then "signed " else ""
     if format.width == 1 then signed else s"$signed[${format.width - 1}:0] "
 
-  def emit(graph: TimedGraph, domain: NttDomain, top: String = "main",reduction:ReductionKind=ReductionKind.Barrett): String =
-    emit(graph,domain.modulus,domain.size,top,reduction)
+  def emit(graph: TimedGraph, domain: NttDomain, top: String = "main",reduction:ReductionKind=ReductionKind.Barrett,splitBarrett:Boolean=false): String =
+    emit(graph,domain.modulus,domain.size,top,reduction,splitBarrett)
 
   def emit(graph:TimedGraph,field:Modulus,size:Int,top:String):String=emit(graph,field,size,top,ReductionKind.Barrett)
   def emit(graph: TimedGraph, field: Modulus, size: Int, top: String,reduction:ReductionKind): String =
+    emit(graph,field,size,top,reduction,false)
+  def emit(graph: TimedGraph, field: Modulus, size: Int, top: String,reduction:ReductionKind,splitBarrett:Boolean): String =
     require(top.matches("[A-Za-z_][A-Za-z0-9_$]*"), s"invalid SystemVerilog module name: $top")
     require(reduction==ReductionKind.Barrett||reduction==ReductionKind.SparseFold)
     val barrett = BarrettField(field)
     val width = field.bitWidth
+    require(!splitBarrett || reduction==ReductionKind.Barrett)
+    def split(node:Node):Boolean = splitBarrett && node.operator.isInstanceOf[BarrettMultiplyConstant]
+    graph.nodes.filter(split).foreach(node => require(node.operator.latency==5,"split Barrett requires five scheduled cycles"))
     val inputs = graph.nodes.collect { case Node(signal, InputOperator(port, format), _) => (signal, port, format) }
     require(inputs.map(_._2).sorted == Vector.tabulate(size)(i => s"i$i").sorted, "generic NTT graph must expose i0..iN-1")
     require(graph.outputs.size == size)
@@ -45,6 +50,12 @@ object GraphSystemVerilog:
     val declarations = graph.nodes.flatMap { node =>
       node.operator match
         case _: InputOperator => Vector.empty
+        case operator if split(node) =>
+          val id=node.signal.id
+          Vector(s"  reg [${2*width-1}:0] s${id}_product,s${id}_product_d1,s${id}_product_d2;",
+            s"  reg [${4*width-1}:0] s${id}_scaled;reg [${3*width-1}:0] s${id}_qp;",
+            s"  reg signed [${3*width}:0] s${id}_remainder;reg [${width-1}:0] s${id}_result;",
+            s"  wire [${width-1}:0] s$id=s${id}_result;")
         case operator if operator.latency == 0 =>
           Vector(s"  wire ${declaration(node.signal.format)}s${node.signal.id};")
         case operator =>
@@ -63,6 +74,9 @@ object GraphSystemVerilog:
 
     val resetLines = graph.nodes.flatMap { node =>
       node.operator match
+        case operator if split(node) =>
+          Vector("product","product_d1","product_d2","scaled","qp","remainder","result")
+            .map(suffix=>s"      s${node.signal.id}_$suffix <= '0;")
         case operator if !operator.isInstanceOf[InputOperator] && operator.latency > 0 =>
           Vector.tabulate(operator.latency)(index => s"      s${node.signal.id}_pipe[$index] <= '0;")
         case _ => Vector.empty
@@ -71,6 +85,14 @@ object GraphSystemVerilog:
     val clockLines = graph.nodes.flatMap { node =>
       node.operator match
         case _: InputOperator => Vector.empty
+        case operator if split(node) =>
+          val id=node.signal.id
+          val constant=field.normalize(operator.asInstanceOf[BarrettMultiplyConstant].constant)
+          Vector(s"      s${id}_product <= ${reference(node.inputs.head)} * ${width}'d$constant;",
+            s"      s${id}_scaled <= s${id}_product * BARRETT_MU;s${id}_product_d1 <= s${id}_product;",
+            s"      s${id}_qp <= s${id}_scaled[${4*width-1}:${2*width}] * MODULUS;s${id}_product_d2 <= s${id}_product_d1;",
+            s"      s${id}_remainder <= $$signed({${width+1}'d0,s${id}_product_d2})-$$signed({1'b0,s${id}_qp});",
+            s"      s${id}_result <= correct_remainder(s${id}_remainder);")
         case operator if operator.latency > 0 =>
           Vector(s"      s${node.signal.id}_pipe[0] <= ${expression(node)};") ++
             Vector.tabulate(operator.latency - 1)(index => s"      s${node.signal.id}_pipe[${index + 1}] <= s${node.signal.id}_pipe[$index];")
@@ -120,6 +142,13 @@ object GraphSystemVerilog:
        |  endfunction
        |
        |  $multiplyFunction
+       |  function automatic [${width-1}:0] correct_remainder(input signed [${3*width}:0] value);
+       |    reg signed [${3*width}:0] r;
+       |    begin r=value;if(r<0)r=r+MODULUS_REMAINDER;
+       |      if(r>=MODULUS_REMAINDER)r=r-MODULUS_REMAINDER;
+       |      if(r>=MODULUS_REMAINDER)r=r-MODULUS_REMAINDER;
+       |      correct_remainder=r[${width-1}:0];end
+       |  endfunction
        |  /* verilator lint_on UNUSEDSIGNAL */
        |
        |${(declarations ++ nextDeclaration).mkString("\n")}

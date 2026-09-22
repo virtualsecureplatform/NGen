@@ -42,6 +42,9 @@ final case class GeneratorConfig(
   require(domain.logSize % radixLog == 0, s"radix log $radixLog must divide transform log ${domain.logSize}")
   require(stageGroups >= 1 && stageGroups <= domain.logSize, "stage groups must be within 1..log2(N)")
   require(peCount.forall(_ > 0), "PE count must be positive")
+  require(profile != ProfileName.SplitBarrett ||
+    (architecture == ArchitectureKind.FullyParallel && domain.name == "custom"),
+    "split-barrett is restricted to custom fully-parallel transforms")
 
 enum Command:
   case Generate(config: GeneratorConfig)
@@ -94,7 +97,7 @@ object Cli:
       |  -k <k>          For switchtranspose, log2 input lanes; defaults to -n (square).
       |  -fixed-rate     For rectangular switchtranspose, omit ready and use a fixed frame interval.
       |  -rate-preserving Keep the rectangular switchtranspose external width and frame rate unchanged.
-      |  -profile <name> Pipeline profile: baseline (default) or f300.
+      |  -profile <name> Pipeline profile: baseline (default), f300, or split-barrett (custom fully-parallel).
       |  -architecture <a> RTL architecture: auto, full-throughput, compact, fully-parallel, streamed, or stage-parallel.
       |  -preset-backend <b> Preset lowering: auto, full-throughput, compact, microcoded, or stage-parallel.
       |  -reduction <r>  Modular reduction: auto (default), barrett, montgomery, or shoup.

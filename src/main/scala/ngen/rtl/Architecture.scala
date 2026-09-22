@@ -1,13 +1,14 @@
 package ngen.rtl
 
 enum ProfileName:
-  case Baseline, F300
+  case Baseline, F300, SplitBarrett
 
 object ProfileName:
   def parse(value: String): ProfileName = value.toLowerCase match
     case "baseline" => ProfileName.Baseline
     case "f300" => ProfileName.F300
-    case other => throw new IllegalArgumentException(s"unknown pipeline profile '$other'; expected baseline or f300")
+    case "split-barrett" => ProfileName.SplitBarrett
+    case other => throw new IllegalArgumentException(s"unknown pipeline profile '$other'; expected baseline, f300, or split-barrett")
 
 final case class PipelineProfile(
     name: ProfileName,
@@ -21,7 +22,11 @@ final case class PipelineProfile(
 object PipelineProfile:
   val Baseline = PipelineProfile(ProfileName.Baseline, addLatency = 1, multiplierLatency = 2, reductionLatency = 1, memoryReadLatency = 1)
   val F300 = PipelineProfile(ProfileName.F300, addLatency = 1, multiplierLatency = 3, reductionLatency = 2, memoryReadLatency = 1)
-  def named(name: ProfileName): PipelineProfile = if name == ProfileName.Baseline then Baseline else F300
+  val SplitBarrett = PipelineProfile(ProfileName.SplitBarrett, addLatency = 1, multiplierLatency = 3, reductionLatency = 2, memoryReadLatency = 1)
+  def named(name: ProfileName): PipelineProfile = name match
+    case ProfileName.Baseline => Baseline
+    case ProfileName.F300 => F300
+    case ProfileName.SplitBarrett => SplitBarrett
 
 enum ReductionKind:
   case YataSredc, Goldilocks, KyberMontgomery, Barrett, Montgomery, Shoup, FermatShift, SparseFold

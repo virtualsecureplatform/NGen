@@ -11,7 +11,8 @@ object SearchCapabilities:
     "generic":{
       "architectures":["streamed","compact","fully-parallel","stage-parallel","full-throughput"],
       "reductions":["auto","barrett","montgomery","shoup"],
-      "profiles":["baseline","f300"],
+      "profiles":["baseline","f300","split-barrett"],
+      "profile_constraints":"split-barrett requires custom fully-parallel architecture",
       "protocols":["next","ready-valid"],
       "stage_groups":{"min":1,"max":"log2(N)","constraints":"groups > 1 require complete radix-2 custom streamed/compact ready-valid raw indexed designs"},
       "pe_count":"positive; actual count and bank constraints are reported by plan",

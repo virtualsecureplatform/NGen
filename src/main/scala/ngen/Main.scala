@@ -371,7 +371,8 @@ object Main:
           )
         else if useFullyParallel then
           val graph = GenericNttGraph.build(config.domain, inverse, profile)
-          Files.writeString(output, GraphSystemVerilog.emit(graph, config.domain, top))
+          Files.writeString(output, GraphSystemVerilog.emit(graph, config.domain, top,
+            splitBarrett = config.profile == ProfileName.SplitBarrett))
           Architecture(
             s"custom-${if inverse then "intt" else "ntt"}-${if config.architecture == ArchitectureKind.FullThroughput then "full-throughput" else "fully-parallel"}",
             Vector(Port("clock", PortDirection.Input, ValueFormat.Valid), Port("reset", PortDirection.Input, ValueFormat.Valid), Port("next", PortDirection.Input, ValueFormat.Valid)),

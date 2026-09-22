@@ -22,6 +22,7 @@ final case class DesignMetadata(
     val profile = architecture.profile.name match
       case ProfileName.Baseline => "baseline"
       case ProfileName.F300 => "f300"
+      case ProfileName.SplitBarrett => "split-barrett"
     val parameters = architectureParameters.toVector.sortBy(_._1).map { case (name, value) => s"    ${quote(name)}: $value" }.mkString(",\n")
     val fullThroughput = architecture.name.contains("full-throughput")
     val minimumGap = math.max(0, architecture.contract.initiationInterval - architecture.contract.inputCycles)
