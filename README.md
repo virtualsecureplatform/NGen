@@ -212,9 +212,12 @@ separate coefficient-memory pass.
 `-transpose indexed` preserves the v0.1 compiled-address implementation.
 `-transpose switch` uses recursive HOGE `SwitchTransposeUnit` networks for
 YATA inverse input/forward output, HOGE inverse input, and square custom
-streams where `K` equals the number of stream cycles. Custom input and output
-address plans are transformed with the physical networks, preserving natural
-external order.
+streams where `K` equals the number of stream cycles. Rectangular custom
+streams use two rate-preserving tensor-buffer adapters around the fixed-width
+NTT core. Custom input and output address plans use inverse boundary
+permutations where needed, preserving natural external order. The rectangular
+wrapper serializes whole frames; its buffering cost and frame interval should
+be measured independently of the square switch network.
 `-transpose distributed` is a HOGE forward-only mode. It decomposes the 32×32
 transpose into four independently buffered 16×16 switch networks, reducing the
 largest routing region at the cost of additional buffering and latency.
@@ -236,8 +239,8 @@ cycles, with the same gaps between frames.
 The second form is rectangular: it accepts four cycles of eight elements and
 emits eight cycles of four elements. Square shapes retain the recursive switch
 network; rectangular shapes use an explicit width-changing tensor adapter.
-The NTT boundary wrappers still require square streams because their core ports
-have a fixed vector width.
+The NTT boundary wrapper keeps the core's fixed vector width by using the
+rate-preserving adapter for rectangular streams.
 
 Rectangular adapters use two tensor buffers and expose `input_ready`. A source
 may start consecutive frames whenever this signal is high. When the transpose

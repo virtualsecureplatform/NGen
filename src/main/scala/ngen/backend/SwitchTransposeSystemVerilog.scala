@@ -118,10 +118,10 @@ object SwitchTransposeSystemVerilog:
        |module $top(input clock,input reset,input valid_in$readyPort,input [$inBits-1:0] data_in,output reg valid_out,output reg [$outBits-1:0] data_out);
        |  localparam integer INPUT_CYCLES=${spec.inputCycles},INPUT_LANES=${spec.inputLanes},OUTPUT_CYCLES=$externalCycles,OUTPUT_LANES=$externalLanes,FRAME_INTERVAL=$frameInterval,MIN_FRAME_GAP=$minimumGap;
        |  localparam [1:0] FREE=0,CAPTURE=1,QUEUED=2,OUTPUT=3;
-       |  reg [1:0] buffer_state [0:1];reg capture_active,capture_buffer,output_active,output_buffer;reg [${spec.dataWidth - 1}:0] storage_0 [0:${spec.inputCycles * spec.inputLanes - 1}],storage_1 [0:${spec.inputCycles * spec.inputLanes - 1}];integer input_count,output_count,lane;
+       |  reg [1:0] buffer_state [0:1];reg capture_active,capture_buffer,output_active,output_buffer;reg [${spec.dataWidth - 1}:0] storage_0 [0:${spec.inputCycles * spec.inputLanes - 1}],storage_1 [0:${spec.inputCycles * spec.inputLanes - 1}];integer input_count,output_count;
        |  $readyAssignment
        |  always @(posedge clock) begin
-       |    if(reset) begin input_count<=0;output_count<=0;capture_active<=0;output_active<=0;capture_buffer<=0;output_buffer<=0;buffer_state[0]<=FREE;buffer_state[1]<=FREE;valid_out<=0;data_out<='0;for(lane=0;lane<INPUT_CYCLES*INPUT_LANES;lane=lane+1)begin storage_0[lane]<='0;storage_1[lane]<='0;end end
+       |    if(reset) begin input_count<=0;output_count<=0;capture_active<=0;output_active<=0;capture_buffer<=0;output_buffer<=0;buffer_state[0]<=FREE;buffer_state[1]<=FREE;valid_out<=0;data_out<='0;end
        |    else begin
        |      valid_out<=0;
        |      if(valid_in&&input_ready) begin

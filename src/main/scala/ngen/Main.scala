@@ -340,16 +340,17 @@ object Main:
             "stage-parallel architecture currently supports Barrett, Montgomery, Shoup, or sparse-fold reduction")
           val basePlan = NttPlan.radix2(config.domain, inverse, config.inputOrder, config.outputOrder)
           val useSwitchTranspose = config.transpose == ngen.rtl.TransposeKind.Switch
-          if useSwitchTranspose then
-            require(config.streamingWidth * config.streamingWidth == config.domain.size,
-              "switch transpose requires streaming width equal to stream cycle count")
+          val plan = if useSwitchTranspose then SwitchBoundaryPlan(basePlan, config.streamingWidth) else basePlan
           val coreTop = if useSwitchTranspose then s"${top}Core" else top
-          val coreRtl = StageParallelNttSystemVerilog.emit(basePlan, config.streamingWidth, coreTop, config.profile, reductionKind)
+          val coreRtl = StageParallelNttSystemVerilog.emit(plan, config.streamingWidth, coreTop, config.profile, reductionKind)
           Files.writeString(output,
-            if useSwitchTranspose then GenericSwitchTransposeWrapper.emit(coreRtl, top, coreTop, config.streamingWidth, config.domain.modulus.bitWidth)
+            if useSwitchTranspose then GenericSwitchTransposeWrapper.emit(coreRtl, top, coreTop, config.streamingWidth, config.domain.modulus.bitWidth, config.domain.size)
             else coreRtl)
           val stageCount = StageParallelNttSystemVerilog.stageCount(basePlan)
           val streamCycles = config.domain.size / config.streamingWidth
+          val rectangularSwitch = useSwitchTranspose && streamCycles != config.streamingWidth
+          val switchLatency = if rectangularSwitch then 2 * streamCycles + 2
+            else if useSwitchTranspose then 2 * (config.streamingWidth - 1) else 0
           val gap = if config.profile == ProfileName.F300 then 1 else 0
           val executionCycles = stageCount + math.max(0, stageCount - 1) * gap
           architectureParameters ++= Map(
@@ -365,8 +366,8 @@ object Main:
             Vector.empty, Vector.empty,
             Vector(ngen.rtl.CounterSpec("capture", streamCycles), ngen.rtl.CounterSpec("stage", math.max(1, stageCount)), ngen.rtl.CounterSpec("output", streamCycles)),
             StreamingContract(config.domain.size, config.streamingWidth, streamCycles, streamCycles,
-              streamCycles + executionCycles + streamCycles - 1 + (if useSwitchTranspose then 2 * (config.streamingWidth - 1) else 0),
-              streamCycles + executionCycles + streamCycles - 1),
+              streamCycles + executionCycles + streamCycles - 1 + switchLatency,
+              streamCycles + executionCycles + streamCycles - 1 + (if rectangularSwitch then switchLatency else 0)),
             reductionKind, profile
           )
         else if useFullyParallel then
@@ -393,8 +394,6 @@ object Main:
           val useSwitchTranspose = config.transpose == ngen.rtl.TransposeKind.Switch
           if useSwitchTranspose then
             require(config.protocol == StreamProtocol.NextPulse, "switch transpose currently requires the uninterrupted next-pulse protocol")
-            require(config.streamingWidth * config.streamingWidth == config.domain.size,
-              "switch transpose requires streaming width equal to stream cycle count")
           val plan = if useSwitchTranspose then SwitchBoundaryPlan(basePlan, config.streamingWidth) else basePlan
           val requestedPeCount = config.peCount.getOrElse(math.max(1, config.streamingWidth / 2))
           val schedule = PeNttSchedule.build(plan, config.radixLog, requestedPeCount, config.streamingWidth)
@@ -419,7 +418,7 @@ object Main:
             ngen.backend.PartitionedNttSystemVerilog.emit(basePlan.asInstanceOf[NttPlan],config.streamingWidth,requestedPeCount,config.stageGroups,coreTop,config.profile,peReductionKind)
           else PeStreamingNttSystemVerilog.emit(schedule, config.streamingWidth, coreTop, config.profile, peReductionKind, config.protocol, config.runtimeControl)
           Files.writeString(output,
-            if useSwitchTranspose then GenericSwitchTransposeWrapper.emit(coreRtl, top, coreTop, config.streamingWidth, config.domain.modulus.bitWidth)
+            if useSwitchTranspose then GenericSwitchTransposeWrapper.emit(coreRtl, top, coreTop, config.streamingWidth, config.domain.modulus.bitWidth, config.domain.size)
             else if useAxi then Axi4StreamWrapper.emit(coreRtl,top,coreTop,config.streamingWidth,config.domain.modulus.bitWidth,metrics.inputCycles)
             else coreRtl)
           val controlPorts = config.protocol match
@@ -431,6 +430,12 @@ object Main:
           else Vector(schedule)
           val partitionMetrics = partitionSchedules.map(part =>
             PeStreamingNttSystemVerilog.metrics(part,config.streamingWidth,config.profile,peReductionKind))
+          val streamCycles = config.domain.size / config.streamingWidth
+          val rectangularSwitch = useSwitchTranspose && streamCycles != config.streamingWidth
+          val switchLatency = if rectangularSwitch then 2 * streamCycles + 2
+            else if useSwitchTranspose then 2 * (config.streamingWidth - 1) else 0
+          val coreLatency = partitionMetrics.map(_.latency).sum +
+            (config.stageGroups - 1) * (metrics.inputCycles - 1)
           architectureParameters ++= Map(
             "registered_memory_issue_groups" -> partitionSchedules.count(PeStreamingNttSystemVerilog.registeredIssue),
             "block_control_rom_groups" -> partitionSchedules.count(part => PeStreamingNttSystemVerilog.usesBlockControl(part,config.runtimeControl))
@@ -442,7 +447,9 @@ object Main:
             Vector(ngen.rtl.MemorySpec("coefficient_buffers", metrics.bankDepth, ValueFormat.unsigned(config.domain.modulus.bitWidth), banks = 2 * config.stageGroups * metrics.bankCount, readLatency = 1)),
             Vector(ngen.rtl.CounterSpec("capture", metrics.inputCycles), ngen.rtl.CounterSpec("bundle", math.max(1, metrics.bundleCount)), ngen.rtl.CounterSpec("output", metrics.outputCycles)),
             StreamingContract(config.domain.size, config.streamingWidth, metrics.inputCycles, metrics.outputCycles,
-              partitionMetrics.map(_.latency).sum + (config.stageGroups - 1) * (metrics.inputCycles - 1) + (if useSwitchTranspose then 2 * (config.streamingWidth - 1) else 0), partitionMetrics.map(_.initiationInterval).max),
+              coreLatency + switchLatency,
+              if rectangularSwitch then coreLatency + switchLatency
+              else partitionMetrics.map(_.initiationInterval).max),
             peReductionKind, profile
           )
       val metadata = DesignMetadata(Cli.Version, config.domain, architecture, if inverse then "inverse" else "forward", config.radix, output.toString,
