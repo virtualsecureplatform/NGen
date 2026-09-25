@@ -18,7 +18,7 @@ object YataStreamingSystemVerilog:
 
   // Small latency-aware SSA builder. Payload registers have no reset; only
   // validity is reset, permitting DSP and SRL inference and local placement.
-  private class Pipeline:
+  private class Pipeline(val phaseHalf: Option[Int] = None):
     private val declarations = mutable.ArrayBuffer.empty[String]
     private val clocked = mutable.ArrayBuffer.empty[String]
     private val combinational = mutable.ArrayBuffer.empty[String]
@@ -72,7 +72,8 @@ object YataStreamingSystemVerilog:
       require(values.size == 8)
       val name = fresh()
       declarations += s"reg signed [26:0] $name;"
-      combinational += s"always @(*) begin case(input_cycle_$group) ${values.zipWithIndex.map((v,i) => s"3'd$i: $name=${literal(v)};").mkString(" ")} endcase end"
+      val phaseValues = phaseHalf.map(h => values.slice(h*4,h*4+4)).getOrElse(values)
+      combinational += s"always @(*) begin case(input_cycle_$group) ${phaseValues.zipWithIndex.map((v,i) => s"3'd$i: $name=${literal(v)};").mkString(" ")} default: $name=0; endcase end"
       Signal(name,0,27)
     def constant(value: Long): Signal =
       val name=fresh()
@@ -91,7 +92,7 @@ object YataStreamingSystemVerilog:
          |assign valid_out=valid_pipe[${latency-1}];
          |always @(posedge clock) begin
          |  if(reset)begin ${(0 until 8).map(g=>s"input_cycle_$g<=0;").mkString} valid_pipe<=0;end
-         |  else begin ${(0 until 8).map(g=>s"input_cycle_$g<=valid_in ? input_cycle_$g+3'd1 : 3'd0;").mkString} valid_pipe<={valid_pipe[${latency-2}:0],valid_in};end
+         |  else begin ${(0 until 8).map(g=>s"input_cycle_$g<=valid_in ? ((input_cycle_$g==3'd${if phaseHalf.isDefined then 3 else 7}) ? 3'd0 : input_cycle_$g+3'd1) : 3'd0;").mkString} valid_pipe<={valid_pipe[${latency-2}:0],valid_in};end
          |  ${clocked.mkString("\n  ")}
          |end
          |endmodule
@@ -171,8 +172,8 @@ object YataStreamingSystemVerilog:
       forwardRadix(p,a,0,64)
     p.emit(name,a)
 
-  private def radix8Pass(inverse: Boolean, name: String): Design =
-    val p=new Pipeline
+  private def radix8Pass(inverse: Boolean, name: String, phaseHalf: Option[Int] = None): Design =
+    val p=new Pipeline(phaseHalf)
     val a=p.input.clone()
     val tables=YataField.tables(9)
     if inverse then
@@ -193,8 +194,38 @@ object YataStreamingSystemVerilog:
         a(lane)=p.multiply(a(lane),p.factor(Vector.tabulate(8)(cycle=>tables.nttTwist(lane*8+cycle)),lane/8))
     p.emit(name,a)
 
-  def emit(top: String, inverse: Boolean): Design =
+  private def wideDecomposition(top: String): Design =
+    val former=(0 until 2).map(p=>radix8Pass(true,s"${top}Former$p",Some(p)))
+    val later=radix64(true,top+"Later")
+    val transpose=SwitchTransposeSystemVerilog.definitions(SwitchTransposeSpec(2,27),top+"T",resetData=false)
+    val inputs=(0 until 2).map { p =>
+      val wiring=(0 until 64).map(l=>s"assign former_input_$p[$l*27+:27]=data_in[${2*l+p}*32+:27];").mkString("\n")
+      s"wire [1727:0] former_input_$p,former_data_$p; wire former_valid_$p;\n$wiring\n${top}Former$p former_$p(clock,reset,valid_in,former_input_$p,former_valid_$p,former_data_$p);"
+    }.mkString("\n")
+    val links=(for i<-0 until 8;q<-0 until 2;p<-0 until 2 yield {
+      val name=s"transpose_${i}_${q}_$p"
+      val wiring=(0 until 4).map(j=>s"assign ${name}_in[$j*27+:27]=former_data_$p[${(2*j+q)*8+i}*27+:27];").mkString("\n")
+      val out=(0 until 4).map(c=>s"assign later_input_$q[${i*8+4*p+c}*27+:27]=${name}_out[$c*27+:27];").mkString("\n")
+      s"wire [107:0] ${name}_in,${name}_out;wire ${name}_valid;\n$wiring\n${top}TNGenSwitchTransposeNetwork_2 $name(clock,reset,former_valid_$p,${name}_in,${name}_valid,${name}_out);\n$out"
+    }).mkString("\n")
+    val outputs=(0 until 2).map(q=>s"${top}Later later_$q(clock,reset,transpose_0_${q}_0_valid,later_input_$q,later_valid_$q,data_out[${q*1728}+:1728]);").mkString("\n")
+    Design(s"""// Four beats/frame: input polynomial[4*lane+beat], output spectrum[128*beat+lane].
+       |${former.map(_.source).mkString("\n")}
+       |${later.source}
+       |$transpose
+       |module $top(input clock,input reset,input valid_in,input [4095:0] data_in,output valid_out,output [3455:0] data_out);
+       |wire [1727:0] later_input_0,later_input_1;wire later_valid_0,later_valid_1;
+       |$inputs
+       |$links
+       |$outputs
+       |assign valid_out=later_valid_0 & later_valid_1;
+       |endmodule
+       |""".stripMargin,former.head.latency+3+later.latency)
+
+  def emit(top: String, inverse: Boolean, lanes: Int = 64): Design =
     require(top.matches("[A-Za-z_][A-Za-z0-9_]*"))
+    require(lanes==64 || (inverse && lanes==128),"Only decomposition supports 128 lanes")
+    if lanes==128 then return wideDecomposition(top)
     val former=if inverse then radix8Pass(true,top+"Former") else radix64(false,top+"Former")
     val later=if inverse then radix64(true,top+"Later") else radix8Pass(false,top+"Later")
     val transpose=SwitchTransposeSystemVerilog.definitions(SwitchTransposeSpec(3,27),top+"T",resetData=false)

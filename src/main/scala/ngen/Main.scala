@@ -142,20 +142,22 @@ object Main:
     if config.domain.name == "yata512" && config.direction != Direction.Both then
       require(effectivePresetBackend == PresetBackend.FullThroughput,
         "fixed-direction YATA512 requires -architecture full-throughput")
-      require(config.streamingLog == 6 && config.radixLog == 3,
-        "fixed-direction YATA512 requires -k 6 -r 3")
+      require((config.streamingLog == 6 || (config.streamingLog == 7 && config.direction == Direction.Inverse)) && config.radixLog == 3,
+        "fixed-direction YATA512 requires -k 6 (or intt -k 7) -r 3")
       require(config.protocol == StreamProtocol.NextPulse,
         "fixed-direction YATA512 is a fixed-rate frame pipeline; buffer frames externally")
       require(config.transpose == ngen.rtl.TransposeKind.Switch,
         "fixed-direction YATA512 requires -transpose switch")
       val inverse = config.direction == Direction.Inverse
       val top = config.top.getOrElse(if inverse then "YataDecompositionTransform" else "YataReconstructionTransform")
-      val design = YataStreamingSystemVerilog.emit(top,inverse)
+      val lanes = 1 << config.streamingLog
+      val beats = 512 / lanes
+      val design = YataStreamingSystemVerilog.emit(top,inverse,lanes)
       val output = Path.of(config.output.getOrElse(top+".sv"))
       Option(output.getParent).foreach(Files.createDirectories(_))
       Files.writeString(output,design.source)
-      writePresetArtifacts(config,output,"YataSredc",8,8,design.latency,8,Some("yata-fixed-direction-full-throughput-radix8"))
-      val contract = s"""{"schema":"yata-stream-v1","top":"$top","latency":${design.latency},"frame_beats":8,"lanes":64,"input_bits":${if inverse then 32 else 27},"output_bits":${if inverse then 27 else 32},"input_index":"${if inverse then "lane*8+cycle" else "cycle*64+lane"}","output_index":"${if inverse then "cycle*64+lane" else "lane*8+cycle"}","intra_frame_bubbles":false,"backpressure":false}"""
+      writePresetArtifacts(config,output,"YataSredc",beats,beats,design.latency,beats,Some("yata-fixed-direction-full-throughput-radix8"))
+      val contract = s"""{"schema":"yata-stream-v1","top":"$top","latency":${design.latency},"frame_beats":$beats,"lanes":$lanes,"input_bits":${if inverse then 32 else 27},"output_bits":${if inverse then 27 else 32},"input_index":"${if inverse then s"lane*$beats+cycle" else s"cycle*$lanes+lane"}","output_index":"${if inverse then s"cycle*$lanes+lane" else s"lane*$beats+cycle"}","intra_frame_bubbles":false,"backpressure":false}"""
       Files.writeString(Path.of(artifactBase(output)+".stream.json"),contract+"\n")
       println(s"Written design in $output.")
       return true

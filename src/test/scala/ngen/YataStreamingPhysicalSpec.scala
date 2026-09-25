@@ -4,6 +4,14 @@ import ngen.backend.YataStreamingSystemVerilog
 import org.scalatest.funsuite.AnyFunSuite
 
 class YataStreamingPhysicalSpec extends AnyFunSuite:
+  test("128-lane decomposition uses four-cycle spatial slices and square transposes"):
+    val design=YataStreamingSystemVerilog.emit("WideYata",true,128)
+    assert(design.latency==48)
+    assert(design.source.contains("input [4095:0] data_in"))
+    assert(design.source.contains("output [3455:0] data_out"))
+    assert(design.source.contains("input_cycle_0==3'd3"))
+    assert("NGenSwitchTransposeNetwork_2 transpose_".r.findAllIn(design.source).length==32)
+    intercept[IllegalArgumentException] {YataStreamingSystemVerilog.emit("WideYata",false,128)}
   test("fixed-direction YATA keeps eight local phase copies and existing latency"):
     for inverse <- Seq(true,false) do
       val design=YataStreamingSystemVerilog.emit("PhysicalYata",inverse)
