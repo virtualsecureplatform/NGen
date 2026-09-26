@@ -90,6 +90,11 @@ stream orders. This is a fully unrolled stage datapath, so it is a useful
 throughput/timing baseline and a substrate for later banked or PE-limited
 implementations; incomplete Kyber-style plans and Fermat-shift reduction remain
 on the streamed backend.
+For Barrett reduction, each butterfly is emitted as structural combinational
+logic with a constant-wired twiddle input. Capture and output scaling each
+share one multiplier per active lane. This keeps the large stage network and
+boundary multiplications out of the procedural process expansion in Yosys;
+the externally visible cycle timing remains unchanged.
 
 The SGen-style names are `full-throughput` for an acyclic zero-gap pipeline and
 `compact` for hardware-reusing/interleaved execution. Existing `streamed`,
