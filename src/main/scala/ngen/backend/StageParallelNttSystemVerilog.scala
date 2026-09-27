@@ -86,13 +86,13 @@ object StageParallelNttSystemVerilog:
       result.toVector
 
     val stageCases = plan.stages.map(stage => s"begin\n${lines(stageLines(stage.butterflies),10)}\n      end").zipWithIndex.map { case (body,index) => s"$index: $body" }.mkString("\n")
-    // Barrett butterflies are emitted as continuous logic.  Keeping thousands
+    // Barrett, Montgomery, and Shoup butterflies are continuous logic. Keeping thousands
     // of field_mul calls in one procedural case makes Yosys expand a separate
     // process for every call before it can report even coarse cell counts.
     // Twiddles are constant-wired ports, not module parameters: otherwise
     // Yosys specializes a new module for each distinct twiddle during read.
-    val structuralBarrett = reduction == ReductionKind.Barrett
-    val stageNetwork = if structuralBarrett then
+    val structuralReduction = reduction != ReductionKind.SparseFold
+    val stageNetwork = if structuralReduction then
       plan.stages.zipWithIndex.flatMap { case (stage, stageIndex) =>
         val covered = stage.butterflies.flatMap(b => Vector(b.left, b.right)).sorted
         require(covered == (0 until size).toVector, "each stage must cover every coefficient once")
@@ -102,7 +102,7 @@ object StageParallelNttSystemVerilog:
           val gs = if butterfly.kind == ButterflyKind.GentlemanSande then "1'b1" else "1'b0"
           Vector(
             s"  wire [${width - 1}:0] stage_${stageIndex}_$left, stage_${stageIndex}_$right;",
-            s"  ${top}_BarrettButterfly #(.GS($gs)) butterfly_${stageIndex}_$butterflyIndex (.left(work[$left]), .right(work[$right]), .twiddle(${literal(butterfly.twiddle)}), .left_out(stage_${stageIndex}_$left), .right_out(stage_${stageIndex}_$right));"
+            s"  ${top}_Butterfly #(.GS($gs)) butterfly_${stageIndex}_$butterflyIndex (.left(work[$left]), .right(work[$right]), .twiddle(${literal(butterfly.twiddle)}), .twiddle_shoup(${precondition(butterfly.twiddle)}), .left_out(stage_${stageIndex}_$left), .right_out(stage_${stageIndex}_$right));"
           )
         }
       }.mkString("\n") + "\n" +
@@ -119,34 +119,50 @@ object StageParallelNttSystemVerilog:
     def captureAssignments(cycle: Int): Vector[String] = Vector.tabulate(streamingWidth) { lane =>
       val index = cycle * streamingWidth + lane
       val address = plan.inputAddresses(index)
-      val value = if structuralBarrett then s"capture_value_$lane" else inputValue(s"i$lane", plan.inputFactors(index))
+      val value = if structuralReduction then s"capture_value_$lane" else inputValue(s"i$lane", plan.inputFactors(index))
       s"work[$address] <= $value;"
     }
     def outputAssignments(cycle: Int): Vector[String] = Vector.tabulate(streamingWidth) { lane =>
       val index = cycle * streamingWidth + lane
       val address = plan.outputAddresses(index)
-      val value = if structuralBarrett then s"output_value_$lane" else outputValue(s"work[$address]", plan.outputFactors(index))
+      val value = if structuralReduction then s"output_value_$lane" else outputValue(s"work[$address]", plan.outputFactors(index))
       s"o$lane <= $value;"
     }
-    val boundaryNetwork = if structuralBarrett then
+    def captureLiteral(factor: BigInt): String =
+      if reduction == ReductionKind.Montgomery then s"${width}'d${field.multiply(montgomeryR2, factor)}"
+      else literal(factor)
+    def reciprocal(factor: BigInt): String =
+      if reduction == ReductionKind.Shoup then precondition(factor) else s"${width}'d0"
+    val boundaryNetwork = if structuralReduction then
       (0 until streamingWidth).flatMap { lane =>
         val first = lane
-        val captureFactor = (1 until inputCycles).reverse.foldLeft(literal(plan.inputFactors(first))) { (otherwise, cycle) =>
-          s"((state == CAPTURE && capture_count == $cycle) ? ${literal(plan.inputFactors(cycle * streamingWidth + lane))} : $otherwise)"
+        val captureFactor = (1 until inputCycles).reverse.foldLeft(captureLiteral(plan.inputFactors(first))) { (otherwise, cycle) =>
+          s"((state == CAPTURE && capture_count == $cycle) ? ${captureLiteral(plan.inputFactors(cycle * streamingWidth + lane))} : $otherwise)"
+        }
+        val captureReciprocal = (1 until inputCycles).reverse.foldLeft(reciprocal(plan.inputFactors(first))) { (otherwise, cycle) =>
+          s"((state == CAPTURE && capture_count == $cycle) ? ${reciprocal(plan.inputFactors(cycle * streamingWidth + lane))} : $otherwise)"
         }
         val outputFactor = (1 until inputCycles).reverse.foldLeft(literal(plan.outputFactors(first))) { (otherwise, cycle) =>
           s"(output_count == $cycle ? ${literal(plan.outputFactors(cycle * streamingWidth + lane))} : $otherwise)"
+        }
+        val outputReciprocal = (1 until inputCycles).reverse.foldLeft(reciprocal(plan.outputFactors(first))) { (otherwise, cycle) =>
+          s"(output_count == $cycle ? ${reciprocal(plan.outputFactors(cycle * streamingWidth + lane))} : $otherwise)"
         }
         val outputWord = (1 until inputCycles).reverse.foldLeft(s"work[${plan.outputAddresses(first)}]") { (otherwise, cycle) =>
           s"(output_count == $cycle ? work[${plan.outputAddresses(cycle * streamingWidth + lane)}] : $otherwise)"
         }
         Vector(
           s"  wire [${width - 1}:0] capture_factor_$lane = $captureFactor;",
+          s"  wire [${width - 1}:0] capture_reciprocal_$lane = $captureReciprocal;",
           s"  wire [${width - 1}:0] output_factor_$lane = $outputFactor;",
+          s"  wire [${width - 1}:0] output_reciprocal_$lane = $outputReciprocal;",
           s"  wire [${width - 1}:0] output_word_$lane = $outputWord;",
-          s"  wire [${width - 1}:0] capture_value_$lane, output_value_$lane;",
-          s"  ${top}_BarrettMul capture_mul_$lane (.a(i$lane), .b(capture_factor_$lane), .result(capture_value_$lane));",
-          s"  ${top}_BarrettMul output_mul_$lane (.a(output_word_$lane), .b(output_factor_$lane), .result(output_value_$lane));"
+          s"  wire [${width - 1}:0] capture_value_$lane, output_first_$lane, output_value_$lane;",
+          s"  ${top}_FieldMul capture_mul_$lane (.a(i$lane), .b(capture_factor_$lane), .b_shoup(capture_reciprocal_$lane), .result(capture_value_$lane));",
+          s"  ${top}_FieldMul output_mul_$lane (.a(output_word_$lane), .b(output_factor_$lane), .b_shoup(output_reciprocal_$lane), .result(output_first_$lane));",
+          if reduction == ReductionKind.Montgomery then
+            s"  ${top}_FieldMul output_convert_$lane (.a(output_first_$lane), .b(${width}'d1), .b_shoup(${width}'d0), .result(output_value_$lane));"
+          else s"  assign output_value_$lane = output_first_$lane;"
         )
       }.mkString("\n")
     else ""
@@ -180,35 +196,57 @@ object StageParallelNttSystemVerilog:
            |  endfunction""".stripMargin
       case ReductionKind.SparseFold => "  "+SparseFoldFunction.emit(field).replace("\n","\n  ")
       case _ => throw new IllegalArgumentException("unsupported stage-parallel reduction")
-    val stageCombinational = if structuralBarrett then stageNetwork + "\n" + boundaryNetwork else
+    val structuralArithmetic = reduction match
+      case ReductionKind.Barrett =>
+        s"""  localparam signed [${3 * width}:0] MODULUS_REMAINDER=${3 * width + 1}'sd${field.q};
+           |  localparam [${2 * width - 1}:0] BARRETT_MU=${2 * width}'d${barrett.mu};
+           |  wire [${2 * width - 1}:0] product = {{$width{1'b0}},a}*{{$width{1'b0}},b};
+           |  wire [${4 * width - 1}:0] scaled = {{${2 * width}{1'b0}},product}*{{${2 * width}{1'b0}},BARRETT_MU};
+           |  wire [${2 * width - 1}:0] quotient = scaled[${4 * width - 1}:${2 * width}];
+           |  wire [${3 * width - 1}:0] quotient_product = {{$width{1'b0}},quotient}*{{${2 * width}{1'b0}},MODULUS};
+           |  wire signed [${3 * width}:0] remainder0 = $$signed({${width + 1}'d0,product})-$$signed({1'b0,quotient_product});
+           |  wire signed [${3 * width}:0] remainder1 = remainder0 < 0 ? remainder0 + MODULUS_REMAINDER : remainder0;
+           |  wire signed [${3 * width}:0] remainder2 = remainder1 >= MODULUS_REMAINDER ? remainder1 - MODULUS_REMAINDER : remainder1;
+           |  wire signed [${3 * width}:0] remainder3 = remainder2 >= MODULUS_REMAINDER ? remainder2 - MODULUS_REMAINDER : remainder2;
+           |  assign result = remainder3[${width - 1}:0];""".stripMargin
+      case ReductionKind.Montgomery =>
+        s"""  localparam [${width - 1}:0] MONTGOMERY_QINV=${width}'d$montgomeryQInv;
+           |  wire [${2 * width - 1}:0] product = {{$width{1'b0}},a}*{{$width{1'b0}},b};
+           |  wire [${2 * width - 1}:0] correction_product = {{$width{1'b0}},product[${width - 1}:0]}*{{$width{1'b0}},MONTGOMERY_QINV};
+           |  wire [${width - 1}:0] correction = correction_product[${width - 1}:0];
+           |  wire [${2 * width - 1}:0] multiple = {{$width{1'b0}},correction}*{{$width{1'b0}},MODULUS};
+           |  wire [${2 * width}:0] sum = {1'b0,product}+{1'b0,multiple};
+           |  wire [${width}:0] upper = sum[${2 * width}:$width];
+           |  wire [${width}:0] reduced = upper >= {1'b0,MODULUS} ? upper-{1'b0,MODULUS} : upper;
+           |  assign result = reduced[${width - 1}:0];""".stripMargin
+      case ReductionKind.Shoup =>
+        s"""  wire [${2 * width - 1}:0] product = {{$width{1'b0}},a}*{{$width{1'b0}},b};
+           |  wire [${2 * width - 1}:0] approximate_product = {{$width{1'b0}},a}*{{$width{1'b0}},b_shoup};
+           |  wire [${width - 1}:0] approximate_quotient = approximate_product[${2 * width - 1}:$width];
+           |  wire [${2 * width - 1}:0] quotient_product = {{$width{1'b0}},approximate_quotient}*{{$width{1'b0}},MODULUS};
+           |  wire [${2 * width}:0] remainder0 = {1'b0,product}-{1'b0,quotient_product};
+           |  wire [${2 * width}:0] remainder1 = remainder0 >= {{${width + 1}{1'b0}},MODULUS} ? remainder0-{{${width + 1}{1'b0}},MODULUS} : remainder0;
+           |  assign result = remainder1[${width - 1}:0];""".stripMargin
+      case _ => ""
+    val stageCombinational = if structuralReduction then stageNetwork + "\n" + boundaryNetwork else
       s"always @(*) begin for(j=0;j<N;j=j+1)stage_next[j]=work[j];tmp=0;tmp2=0;case(stage_index) $stageCases default:begin end endcase end"
-    val structuralButterfly = if structuralBarrett then
+    val structuralButterfly = if structuralReduction then
       s"""
-         |module ${top}_BarrettMul(input [${width - 1}:0] a, b,
+         |module ${top}_FieldMul(input [${width - 1}:0] a, b, b_shoup,
          |  output [${width - 1}:0] result);
          |  localparam [${width - 1}:0] MODULUS=${width}'d${field.q};
-         |  localparam signed [${3 * width}:0] MODULUS_REMAINDER=${3 * width + 1}'sd${field.q};
-         |  localparam [${2 * width - 1}:0] BARRETT_MU=${2 * width}'d${barrett.mu};
-         |  wire [${2 * width - 1}:0] product = {{$width{1'b0}},a}*{{$width{1'b0}},b};
-         |  wire [${4 * width - 1}:0] scaled = {{${2 * width}{1'b0}},product}*{{${2 * width}{1'b0}},BARRETT_MU};
-         |  wire [${2 * width - 1}:0] quotient = scaled[${4 * width - 1}:${2 * width}];
-         |  wire [${3 * width - 1}:0] quotient_product = {{$width{1'b0}},quotient}*{{${2 * width}{1'b0}},MODULUS};
-         |  wire signed [${3 * width}:0] remainder0 = $$signed({${width + 1}'d0,product})-$$signed({1'b0,quotient_product});
-         |  wire signed [${3 * width}:0] remainder1 = remainder0 < 0 ? remainder0 + MODULUS_REMAINDER : remainder0;
-         |  wire signed [${3 * width}:0] remainder2 = remainder1 >= MODULUS_REMAINDER ? remainder1 - MODULUS_REMAINDER : remainder1;
-         |  wire signed [${3 * width}:0] remainder3 = remainder2 >= MODULUS_REMAINDER ? remainder2 - MODULUS_REMAINDER : remainder2;
-         |  assign result = remainder3[${width - 1}:0];
+         |$structuralArithmetic
          |endmodule
          |
-         |module ${top}_BarrettButterfly #(
+         |module ${top}_Butterfly #(
          |  parameter GS = 1'b0
-         |)(input [${width - 1}:0] left, right, twiddle,
+         |)(input [${width - 1}:0] left, right, twiddle, twiddle_shoup,
          |  output [${width - 1}:0] left_out, right_out);
          |  localparam [${width}:0] MODULUS_EXT=${width + 1}'d${field.q};
          |  wire [${width}:0] gs_difference = right >= left ? {1'b0,right}-{1'b0,left} : {1'b0,right}+MODULUS_EXT-{1'b0,left};
          |  wire [${width - 1}:0] mul_operand = GS ? gs_difference[${width - 1}:0] : right;
          |  wire [${width - 1}:0] multiplied;
-         |  ${top}_BarrettMul twiddle_mul (.a(mul_operand), .b(twiddle), .result(multiplied));
+         |  ${top}_FieldMul twiddle_mul (.a(mul_operand), .b(twiddle), .b_shoup(twiddle_shoup), .result(multiplied));
          |  wire [${width}:0] add_right = GS ? {1'b0,right} : {1'b0,multiplied};
          |  wire [${width}:0] sum = {1'b0,left} + add_right;
          |  wire [${width}:0] reduced_sum = sum >= MODULUS_EXT ? sum - MODULUS_EXT : sum;
@@ -228,8 +266,8 @@ object StageParallelNttSystemVerilog:
        |$reductionParameters
        |  function automatic [${width - 1}:0] mod_add(input [${width - 1}:0] a,input [${width - 1}:0] b); reg [$width:0] sum; begin sum={1'b0,a}+{1'b0,b}; if(sum>=MODULUS_EXT)sum=sum-MODULUS_EXT; mod_add=sum[${width - 1}:0]; end endfunction
        |  function automatic [${width - 1}:0] mod_sub(input [${width - 1}:0] a,input [${width - 1}:0] b); reg [$width:0] difference; begin if(a>=b)difference={1'b0,a}-{1'b0,b};else difference={1'b0,a}+MODULUS_EXT-{1'b0,b}; mod_sub=difference[${width - 1}:0]; end endfunction
-       |${if structuralBarrett then "" else multiplyFunction}
-       |  reg [${width - 1}:0] work [0:N-1]; ${if structuralBarrett then "wire" else "reg"} [${width - 1}:0] stage_next [0:N-1]; ${if structuralBarrett then "" else s"reg [${width - 1}:0] tmp,tmp2;"} integer j;
+       |${if structuralReduction then "" else multiplyFunction}
+       |  reg [${width - 1}:0] work [0:N-1]; ${if structuralReduction then "wire" else "reg"} [${width - 1}:0] stage_next [0:N-1]; ${if structuralReduction then "" else s"reg [${width - 1}:0] tmp,tmp2;"} integer j;
        |  integer capture_count,stage_index,output_count,gap_count; localparam [1:0] IDLE=0,CAPTURE=1,EXECUTE=2,OUTPUT_DATA=3; reg [1:0] state;
        |  assign ready=(state==IDLE)||((state==OUTPUT_DATA)&&(output_count==OUTPUT_CYCLES-1));
        |  $stageCombinational

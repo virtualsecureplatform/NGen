@@ -22,8 +22,8 @@ class StageParallelNttSystemVerilogSpec extends AnyFunSuite:
     assert(rtl.contains("generic stage-parallel NTT"))
     assert(rtl.contains("localparam integer STAGE_COUNT=3"))
     assert(rtl.contains("module StageNtt("))
-    assert(rtl.contains("module StageNtt_BarrettButterfly"))
-    assert(rtl.contains("module StageNtt_BarrettMul"))
+    assert(rtl.contains("module StageNtt_Butterfly"))
+    assert(rtl.contains("module StageNtt_FieldMul"))
     assert(rtl.contains("butterfly_0_0"))
     assert(rtl.contains(".twiddle(5'd"))
     assert(!rtl.contains(".TWIDDLE("))
@@ -43,6 +43,22 @@ class StageParallelNttSystemVerilogSpec extends AnyFunSuite:
   test("inverse Barrett butterflies use the structural path"):
     val plan = NttPlan.radix2(domain, inverse = true)
     val rtl = StageParallelNttSystemVerilog.emit(plan, 2, "StageInverse", ProfileName.Baseline, ReductionKind.Barrett)
-    assert(rtl.contains("module StageInverse_BarrettButterfly"))
+    assert(rtl.contains("module StageInverse_Butterfly"))
     assert(rtl.contains(".GS(1'b0)"))
     assert(rtl.contains("o0 <= output_value_0"))
+
+  test("Montgomery stage and boundary share structural multiplication"):
+    val rtl = StageParallelNttSystemVerilog.emit(NttPlan.radix2(domain, inverse = true), 2,
+      "MontgomeryNtt", ProfileName.Baseline, ReductionKind.Montgomery)
+    assert(rtl.contains("module MontgomeryNtt_FieldMul"))
+    assert(rtl.contains("MONTGOMERY_QINV"))
+    assert(rtl.contains("output_convert_0"))
+    assert(!rtl.contains("function automatic [4:0] field_mul"))
+
+  test("Shoup stage and boundary carry reciprocal constants"):
+    val rtl = StageParallelNttSystemVerilog.emit(NttPlan.radix2(domain, inverse = true), 2,
+      "ShoupNtt", ProfileName.Baseline, ReductionKind.Shoup)
+    assert(rtl.contains("module ShoupNtt_FieldMul"))
+    assert(rtl.contains(".twiddle_shoup(5'd"))
+    assert(rtl.contains("capture_reciprocal_0"))
+    assert(!rtl.contains("function automatic [4:0] field_mul"))
