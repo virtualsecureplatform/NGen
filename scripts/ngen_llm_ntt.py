@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate and evaluate a characterized NGen LLM-NTT task."""
+"""Legacy task-ID benchmark adapter; use ngen_dse.py for parameter-based DSE."""
 
 from __future__ import annotations
 
@@ -35,7 +35,7 @@ def run(command: list[str], cwd: Path) -> None:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--task", required=True, choices=sorted(TASKS))
     parser.add_argument("--llm-ntt-root", type=Path, default=ROOT.parent / "LLM-NTT-Examples")
     parser.add_argument("--output-dir", type=Path)

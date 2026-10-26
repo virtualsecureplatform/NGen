@@ -21,7 +21,7 @@ bash ngen.bat capabilities
 Keep the source revision and executable SHA-256 in the experiment manifest so
 an older assembly cannot silently stand in for edited sources.
 
-The two machine-readable interfaces are:
+The native machine-readable commands are:
 
 | Command | Success output | What it establishes |
 | --- | --- | --- |
@@ -34,6 +34,93 @@ and then deletes temporary files. Give it a timeout, cache its result, and do
 not call it repeatedly for an unchanged candidate. Successful lowering is not
 functional qualification or timing closure. Treat a nonzero exit as failure;
 retain stdout, stderr, and the return code for diagnosis.
+
+## Recommended parameter-based JSON interface
+
+Use [scripts/ngen_dse.py](../scripts/ngen_dse.py) as a standalone adapter for your
+framework. It accepts a concrete design, not a task ID, and does not import the
+LLM-NTT benchmark catalog or require a sibling evaluator checkout. Grid and LLM
+policies use the same request format.
+
+Start with [examples/dse/ntt512.json](../examples/dse/ntt512.json):
+
+```bash
+python3 scripts/ngen_dse.py capabilities
+python3 scripts/ngen_dse.py plan --spec examples/dse/ntt512.json
+python3 scripts/ngen_dse.py generate --spec examples/dse/ntt512.json \
+  --output-dir build/my-ntt-candidate
+```
+
+All command results are JSON on stdout. `capabilities` returns NGen's native
+`ngen-capabilities-v1` contract. `plan` and `generate` return the adapter's
+`ngen-dse-result-v1` result. Human-readable generator stdout/stderr are captured
+inside that result rather than mixed with JSON. `--ngen` selects another built
+executable and `--timeout` sets a positive command deadline in seconds.
+Generation creates a new directory and refuses to overwrite an existing one.
+
+| Request field | Meaning / default |
+| --- | --- |
+| `schema` | Required: `ngen-dse-design-v1`. Unknown fields are rejected. |
+| `transform_size`, `streaming_width`, `modulus` | Required actual N, actual lane count, and field prime. Sizes must be powers of two; width cannot exceed N. Use a decimal string for large primes to avoid floating-point conversion in JSON clients. |
+| `direction`, `ring` | `forward` / `inverse`; `negacyclic` / `cyclic`. Defaults: forward negacyclic. |
+| `root`, `psi` | Positive integers/decimal strings or `auto`. Defaults: auto; psi is allowed only for negacyclic requests. |
+| `architecture` | `streamed`, `compact`, `stage-parallel`, `fully-parallel`, or `full-throughput`. Default: streamed. |
+| `pe_count`, `radix`, `stage_groups` | Actual counts/values. PE count is omitted by default so the generator chooses it; radix defaults to 2, stage groups to 1. |
+| `reduction`, `profile` | Defaults: `montgomery`, `baseline`; legal alternatives come from `capabilities` and concrete lowering. |
+| `protocol`, `transpose`, `interface` | Defaults: `ready-valid`, `indexed`, `raw`. AXI wrapping is `axi4stream`. |
+| `input_order`, `output_order` | `natural` or `bitreversed`; default: natural. |
+
+The adapter normalizes types and actual sizes. It deliberately delegates
+backend-specific legality, field/root validation, and lowering to NGen. For
+example, a stage-parallel request needs `protocol: next`, radix 2, and no
+`pe_count`. Do not populate every optional field using defaults from another
+architecture. This interface covers custom complete power-of-two NTT/INTT
+transforms; presets and incomplete transforms remain accessible through the
+native CLI.
+
+| Result field | Meaning |
+| --- | --- |
+| `status` | `planned`, `generated`, `lowering-failed`, `timeout`, `generator-changed`, `artifact-error`, or `request-error`. |
+| `candidate_id` | SHA-256 of the normalized requested configuration, generator executable hash, and adapter hash. Plan/generate share the identity for the same inputs. |
+| `configuration` | Normalized request, retaining actual N/L/R values and field values as decimal strings. |
+| `metadata` | Native declared design metadata when lowering succeeds, including resolved architecture and cycle contracts. |
+| `generator_sha256`, `adapter_sha256` | Executable and adapter identity; retain source revision/build provenance separately in your experiment manifest. |
+| `command`, `returncode`, `stdout`, `stderr` | The executed command and available process diagnostics. Timeout/request errors may not have all process fields. |
+| `artifacts` | Generated RTL and native metadata SHA-256 values, for successful generation. |
+| `qualified`, `evidence_scope` | Always generation-only / unqualified. The adapter never asserts functional or physical signoff. |
+
+Exit codes are 0 for success, 1 for a failed lowering/generation attempt, and 2
+for invalid requests or unavailable prerequisites. Generation saves
+`candidate.sv`, `candidate.json`, and `result.json` in the requested directory.
+The final file contains the same result object as stdout. Planning leaves no
+candidate files. There is no automatic result cache or resumed evaluation;
+your framework owns those policies and must include its evaluator/context in
+its cache identity.
+
+A Python controller can call the same interface without launching a Python
+subprocess. From the repository root:
+
+```python
+import json
+from scripts.ngen_dse import evaluate
+
+request = json.load(open('examples/dse/ntt512.json'))
+request.update(streaming_width=16, pe_count=8)
+result = evaluate(request, action='plan', timeout=120)
+if result['status'] == 'planned':
+    print(result['candidate_id'], result['metadata']['initiation_interval'])
+```
+
+Treat this as a generator boundary: attach your own independent simulation and
+physical evaluation before feeding achieved objectives back to a policy. The
+older `ngen_llm_ntt.py --task ...` path is only a compatibility adapter for its
+fixed benchmark evaluator, not the custom-DSE API.
+
+Run the adapter's Python validation/integration tests after assembly:
+
+```bash
+python3 -m unittest discover -s tests/python
+```
 
 ## Fix the workload before choosing search axes
 

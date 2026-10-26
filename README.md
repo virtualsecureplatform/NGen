@@ -12,10 +12,22 @@ operations into the configured hardware width.
 ## Build a custom design space exploration framework
 
 Start with the [external DSE integration guide](docs/design-space-exploration.md).
-It covers machine-readable capability discovery, concrete legality checks,
-architecture/parameter naming, a runnable twelve-design Python sweep, metadata,
-and the evaluation/cache contract for grid or LLM-based search. NGen generates
-transforms; your framework supplies workload qualification and target measurements.
+Use the parameter-based JSON interface directly; no benchmark task ID or sibling
+evaluator repository is required:
+
+```bash
+python3 scripts/ngen_dse.py capabilities
+python3 scripts/ngen_dse.py plan --spec examples/dse/ntt512.json
+python3 scripts/ngen_dse.py generate --spec examples/dse/ntt512.json \
+  --output-dir build/my-ntt-candidate
+```
+
+The specification uses actual values (N=512, L8, PE4, R2), and the adapter maps
+them to the generator CLI. It returns JSON with a candidate identity, declared
+metadata, diagnostics, and generated artifact hashes. The guide covers its
+request/result contract, concrete legality checks, architecture naming, Python
+integration, and a runnable grid sweep. NGen generates transforms; your framework
+supplies workload qualification and target measurements.
 
 ## Supported designs
 
@@ -291,10 +303,11 @@ microcoded` to reproduce the original schedule.
 Every generation writes `<output-stem>.json`. `-graph` writes the transform
 decomposition and `-rtlgraph` writes the scheduled architecture graph.
 
-## LLM-NTT adapter
+## Legacy benchmark-task adapter
 
-The standalone adapter maps characterized task IDs to NGen commands and the
-sibling evaluator:
+For custom design space exploration, use `scripts/ngen_dse.py` above. The
+separate compatibility adapter maps historical characterized task IDs to preset
+NGen commands and the sibling benchmark evaluator:
 
 ```bash
 scripts/ngen_llm_ntt.py \
