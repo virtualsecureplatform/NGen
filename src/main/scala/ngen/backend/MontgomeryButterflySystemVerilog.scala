@@ -1,13 +1,19 @@
 package ngen.backend
 
 import ngen.algebra.Modulus
+import ngen.rtl.NttPipeline
 
 /** One operation per cycle. Register every multiply and separate reduction from butterfly addition. */
 private[backend] object MontgomeryButterflySystemVerilog:
   val Latency = 7
-  def latency(width: Int): Int = if width > 32 then 9 else Latency
+  def latency(width: Int, pipeline: NttPipeline = NttPipeline()): Int = pipeline.butterflyLatency(width)
 
-  def emit(field: Modulus, top: String): String =
+  def emit(field: Modulus, top: String, pipeline: NttPipeline = NttPipeline()): String =
+    if pipeline.multiplier(field.bitWidth) == (if field.bitWidth > 32 then 3 else 1) && pipeline.reduction == 4 then
+      legacy(field,top)
+    else ConfigurableMontgomerySystemVerilog.emit(field,top,pipeline)
+
+  private def legacy(field: Modulus, top: String): String =
     val w=field.bitWidth
     val wide=w>32
     val stages=latency(w)-1

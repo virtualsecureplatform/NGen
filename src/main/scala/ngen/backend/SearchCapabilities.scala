@@ -15,6 +15,14 @@ object SearchCapabilities:
       "profile_constraints":"split-barrett requires custom fully-parallel architecture",
       "protocols":["next","ready-valid"],
       "stage_groups":{"min":1,"max":"log2(N)","constraints":"groups > 1 require complete radix-2 custom streamed/compact ready-valid raw indexed designs"},
+      "pipeline_controls":{
+        "multiplier_pipeline_stages":[1,3],
+        "reduction_pipeline_stages":[3,4,5],
+        "output_register":[false,true],
+        "default":"multiplier 1 for fields up to 32 bits, otherwise 3; reduction 4; output register false",
+        "constraints":"custom complete radix-2 streamed/compact Montgomery ready-valid raw indexed; no runtime control",
+        "butterfly_latency":"2 + multiplier_pipeline_stages + reduction_pipeline_stages; core output register adds one core cycle"
+      },
       "pe_count":"positive; actual count and bank constraints are reported by plan",
       "radix_log":"positive divisor of log2(N)"
     },

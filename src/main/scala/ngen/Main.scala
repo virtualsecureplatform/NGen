@@ -397,10 +397,10 @@ object Main:
           val plan = if useSwitchTranspose then SwitchBoundaryPlan(basePlan, config.streamingWidth) else basePlan
           val requestedPeCount = config.peCount.getOrElse(math.max(1, config.streamingWidth / 2))
           val schedule = PeNttSchedule.build(plan, config.radixLog, requestedPeCount, config.streamingWidth)
-          val metrics = PeStreamingNttSystemVerilog.metrics(schedule, config.streamingWidth, config.profile, peReductionKind)
+          val metrics = PeStreamingNttSystemVerilog.metrics(schedule, config.streamingWidth, config.profile, peReductionKind,config.pipeline)
           architectureParameters ++= Map(
             "pe_count" -> metrics.peCount,
-            "butterfly_pipeline_latency" -> (if config.radix == 2 then PipelinedButterflySystemVerilog.latency(peReductionKind, config.domain.modulus.bitWidth) else config.radixLog),
+            "butterfly_pipeline_latency" -> (if config.radix == 2 then PipelinedButterflySystemVerilog.latency(peReductionKind, config.domain.modulus.bitWidth,config.pipeline) else config.radixLog),
             "radix" -> metrics.radix,
             "bank_count_per_buffer" -> metrics.bankCount,
             "bank_depth" -> metrics.bankDepth,
@@ -410,16 +410,22 @@ object Main:
             "runtime_control" -> (if config.runtimeControl then 1 else 0),
             "control_record_width" -> PeStreamingNttSystemVerilog.packedControlWidth(schedule)
           )
+          if peReductionKind == ReductionKind.Montgomery && config.radix == 2 then
+            architectureParameters ++= Map(
+              "multiplier_pipeline_stages" -> config.pipeline.multiplier(config.domain.modulus.bitWidth),
+              "reduction_pipeline_stages" -> config.pipeline.reduction,
+              "output_register" -> (if config.pipeline.outputRegister then 1 else 0))
           val useAxi=config.interfaceKind==InterfaceKind.Axi4Stream
-          val coreTop = if useSwitchTranspose || useAxi then s"${top}Core" else top
+          val coreTop = if useSwitchTranspose || useAxi || config.pipeline.outputRegister then s"${top}Core" else top
           val coreRtl = if config.stageGroups > 1 then
             require(basePlan.isInstanceOf[NttPlan], "stage groups require a complete transform")
             architectureParameters ++= Map("stage_groups" -> config.stageGroups, "pe_count_total" -> (metrics.peCount * config.stageGroups), "coefficient_buffers" -> (2 * config.stageGroups))
-            ngen.backend.PartitionedNttSystemVerilog.emit(basePlan.asInstanceOf[NttPlan],config.streamingWidth,requestedPeCount,config.stageGroups,coreTop,config.profile,peReductionKind)
-          else PeStreamingNttSystemVerilog.emit(schedule, config.streamingWidth, coreTop, config.profile, peReductionKind, config.protocol, config.runtimeControl)
+            ngen.backend.PartitionedNttSystemVerilog.emit(basePlan.asInstanceOf[NttPlan],config.streamingWidth,requestedPeCount,config.stageGroups,coreTop,config.profile,peReductionKind,config.pipeline)
+          else PeStreamingNttSystemVerilog.emit(schedule, config.streamingWidth, coreTop, config.profile, peReductionKind, config.protocol, config.runtimeControl,config.pipeline)
           Files.writeString(output,
             if useSwitchTranspose then GenericSwitchTransposeWrapper.emit(coreRtl, top, coreTop, config.streamingWidth, config.domain.modulus.bitWidth, config.domain.size)
             else if useAxi then Axi4StreamWrapper.emit(coreRtl,top,coreTop,config.streamingWidth,config.domain.modulus.bitWidth,metrics.inputCycles)
+            else if config.pipeline.outputRegister then ngen.backend.ElasticOutputSystemVerilog.emit(coreRtl,top,coreTop,config.streamingWidth,config.domain.modulus.bitWidth)
             else coreRtl)
           val controlPorts = config.protocol match
             case StreamProtocol.NextPulse => Vector(Port("next", PortDirection.Input, ValueFormat.Valid), Port("ready", PortDirection.Output, ValueFormat.Valid), Port("next_out", PortDirection.Output, ValueFormat.Valid))
@@ -429,7 +435,7 @@ object Main:
               PeNttSchedule.build(part,1,requestedPeCount,config.streamingWidth))
           else Vector(schedule)
           val partitionMetrics = partitionSchedules.map(part =>
-            PeStreamingNttSystemVerilog.metrics(part,config.streamingWidth,config.profile,peReductionKind))
+            PeStreamingNttSystemVerilog.metrics(part,config.streamingWidth,config.profile,peReductionKind,config.pipeline))
           val streamCycles = config.domain.size / config.streamingWidth
           val rectangularSwitch = useSwitchTranspose && streamCycles != config.streamingWidth
           val switchLatency = if rectangularSwitch then 2 * streamCycles + 2
@@ -447,7 +453,7 @@ object Main:
             Vector(ngen.rtl.MemorySpec("coefficient_buffers", metrics.bankDepth, ValueFormat.unsigned(config.domain.modulus.bitWidth), banks = 2 * config.stageGroups * metrics.bankCount, readLatency = 1)),
             Vector(ngen.rtl.CounterSpec("capture", metrics.inputCycles), ngen.rtl.CounterSpec("bundle", math.max(1, metrics.bundleCount)), ngen.rtl.CounterSpec("output", metrics.outputCycles)),
             StreamingContract(config.domain.size, config.streamingWidth, metrics.inputCycles, metrics.outputCycles,
-              coreLatency + switchLatency,
+              coreLatency + switchLatency + (if config.pipeline.outputRegister then 1 else 0),
               if rectangularSwitch then coreLatency + switchLatency
               else partitionMetrics.map(_.initiationInterval).max),
             peReductionKind, profile
@@ -514,7 +520,7 @@ object Main:
           Option(output.getParent).foreach(Files.createDirectories(_))
           Files.writeString(output, SwitchTransposeSystemVerilog.emit(SwitchTransposeSpec(inputCycleLog,inputLaneLog,dataWidth), topName.getOrElse("SwitchTransposeTop"),fixedRate,ratePreserving))
           println(s"Written switch transpose in $output.")
-        case Command.ButterflyPipeline(modulus, reduction, runtimeField, outputName, topName) =>
+        case Command.ButterflyPipeline(modulus, reduction, runtimeField, outputName, topName, pipeline) =>
           val output = Path.of(outputName.getOrElse("butterfly-pipeline.sv"))
           Option(output.getParent).foreach(Files.createDirectories(_))
           val kind = reduction match
@@ -523,7 +529,7 @@ object Main:
             case ReductionChoice.Shoup => ReductionKind.Shoup
             case ReductionChoice.FermatShift => ReductionKind.FermatShift
             case _ => throw new IllegalArgumentException("butterfly pipeline reduction must be explicit")
-          Files.writeString(output, PipelinedButterflySystemVerilog.emit(modulus, kind, topName.getOrElse("NGenPipelinedButterfly"),runtimeField))
+          Files.writeString(output, PipelinedButterflySystemVerilog.emit(modulus, kind, topName.getOrElse("NGenPipelinedButterfly"),runtimeField,pipeline))
           println(s"Written pipelined butterfly in $output.")
         case Command.RnsPolynomial(basis, emitCrt, outputName, topName) =>
           val output = Path.of(outputName.getOrElse("rns-polymul.sv"))

@@ -1,7 +1,7 @@
 package ngen.backend
 
 import ngen.transform.{NttPlan, DataOrder}
-import ngen.rtl.{PeNttSchedule, ProfileName, ReductionKind, StreamProtocol}
+import ngen.rtl.{PeNttSchedule, ProfileName, NttPipeline, ReductionKind, StreamProtocol}
 
 /** A pipeline of independently buffered PE engines, each reusing PEs across a
   * contiguous subset of stages. It is deliberately distinct from an MDC/SDF
@@ -26,13 +26,13 @@ object PartitionedNttSystemVerilog:
       )
     }
 
-  def emit(plan: NttPlan, lanes: Int, peCount: Int, groups: Int, top: String, profile: ProfileName, reduction: ReductionKind): String =
+  def emit(plan: NttPlan, lanes: Int, peCount: Int, groups: Int, top: String, profile: ProfileName, reduction: ReductionKind, pipeline: NttPipeline = NttPipeline()): String =
     require(top.matches("[A-Za-z_][A-Za-z0-9_$]*"))
     val width=plan.domain.modulus.bitWidth
     val plans=partitions(plan,groups)
     val definitions=plans.zipWithIndex.map { (part,index) =>
       val name=s"${top}Group$index"
-      PeStreamingNttSystemVerilog.emit(PeNttSchedule.build(part,1,peCount,lanes),lanes,name,profile,reduction,StreamProtocol.ReadyValid)
+      PeStreamingNttSystemVerilog.emit(PeNttSchedule.build(part,1,peCount,lanes),lanes,name,profile,reduction,StreamProtocol.ReadyValid,pipeline=pipeline)
         .replace("NGenInternalPipelinedButterfly",s"${name}Butterfly")
     }.mkString("\n")
     val ports=Vector.tabulate(lanes)(lane=>s"input [${width-1}:0] i$lane,output [${width-1}:0] o$lane").mkString(",\n")

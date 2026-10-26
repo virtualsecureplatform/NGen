@@ -29,6 +29,15 @@ request/result contract, concrete legality checks, architecture naming, Python
 integration, and a runnable grid sweep. NGen generates transforms; your framework
 supplies workload qualification and target measurements.
 
+## Configure NTT arithmetic pipelines
+
+The [pipeline controls](docs/pipeline-controls.md) expose
+`multiplier_pipeline_stages` (1/3), `reduction_pipeline_stages` (3/4/5), and an
+elastic `output_register` through both the native CLI and JSON interface.
+They currently target custom complete radix-2 streamed/compact Montgomery
+ready-valid cores. Defaults preserve existing RTL; other backends reject these
+overrides. Start with [the pipeline request](examples/dse/ntt512-pipelined.json).
+
 ## Supported designs
 
 | Preset | Configuration | Generated interface |
@@ -195,7 +204,8 @@ other bus wrappers are intentionally not supported. Without this option, NGen
 emits the original raw interface and no AXI-related logic.
 
 Radix-2 PEs use tagged arithmetic pipelines: three cycles for Barrett/Shoup
-and seven cycles for Montgomery. The Montgomery path separates the input
+and, by default, seven cycles for Montgomery (nine above 32-bit fields).
+Montgomery pipeline partitions can be configured as described above. The default path separates the input
 subtraction, multiplies, carry sum, correction, and final butterfly operation.
 Every pipeline accepts one operation per cycle. Metadata includes the selected
 `butterfly_pipeline_latency` and accounts for it when stages drain. The pipeline

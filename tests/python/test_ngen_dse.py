@@ -34,6 +34,17 @@ class DirectDSETests(unittest.TestCase):
                 with self.assertRaises(ValueError):dse.evaluate({**self.design,**change})
                 call.assert_not_called()
 
+    def test_pipeline_controls_are_typed_and_forwarded(self):
+        c=dse.normalize({**self.design,'multiplier_pipeline_stages':3,
+                         'reduction_pipeline_stages':5,'output_register':True})
+        args=dse.arguments(c)
+        self.assertEqual(args[args.index('-multiplier-pipeline-stages')+1],'3')
+        self.assertEqual(args[args.index('-reduction-pipeline-stages')+1],'5')
+        self.assertIn('-output-register',args)
+        for change in ({'multiplier_pipeline_stages':2},{'multiplier_pipeline_stages':True},
+                       {'reduction_pipeline_stages':0},{'output_register':1}):
+            with self.assertRaises(ValueError):dse.normalize({**self.design,**change})
+
     def test_cyclic_does_not_receive_negacyclic_twist(self):
         c=dse.normalize({**self.design,'ring':'cyclic'})
         self.assertNotIn('-psi',dse.arguments(c))
@@ -92,6 +103,12 @@ class DirectDSETests(unittest.TestCase):
             self.assertFalse(generated['qualified'])
             self.assertTrue((root/'out/candidate.sv').is_file())
             self.assertEqual(generated,json.loads((root/'out/result.json').read_text()))
+            pipelined={**self.design,'multiplier_pipeline_stages':3,
+                       'reduction_pipeline_stages':5,'output_register':True}
+            request.write_text(json.dumps(pipelined))
+            configured=cli('plan')
+            self.assertEqual(configured['metadata']['architecture_parameters']['butterfly_pipeline_latency'],10)
+            self.assertEqual(configured['metadata']['architecture_parameters']['output_register'],1)
             changed=copy.deepcopy(self.design);changed['pe_count']=2
             request.write_text(json.dumps(changed))
             self.assertNotEqual(planned['candidate_id'],cli('plan')['candidate_id'])

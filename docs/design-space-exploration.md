@@ -66,6 +66,7 @@ Generation creates a new directory and refuses to overwrite an existing one.
 | `root`, `psi` | Positive integers/decimal strings or `auto`. Defaults: auto; psi is allowed only for negacyclic requests. |
 | `architecture` | `streamed`, `compact`, `stage-parallel`, `fully-parallel`, or `full-throughput`. Default: streamed. |
 | `pe_count`, `radix`, `stage_groups` | Actual counts/values. PE count is omitted by default so the generator chooses it; radix defaults to 2, stage groups to 1. |
+| `multiplier_pipeline_stages`, `reduction_pipeline_stages`, `output_register` | Optional native NTT controls: 1/3 main-product stages, 3/4/5 reduction stages, and an elastic output register. See [pipeline controls](pipeline-controls.md) for restrictions, defaults, and real arithmetic partitions. |
 | `reduction`, `profile` | Defaults: `montgomery`, `baseline`; legal alternatives come from `capabilities` and concrete lowering. |
 | `protocol`, `transpose`, `interface` | Defaults: `ready-valid`, `indexed`, `raw`. AXI wrapping is `axi4stream`. |
 | `input_order`, `output_order` | `natural` or `bitreversed`; default: natural. |

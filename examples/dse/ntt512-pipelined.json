@@ -1,0 +1,19 @@
+{
+  "schema": "ngen-dse-design-v1",
+  "transform_size": 512,
+  "streaming_width": 8,
+  "modulus": "65537",
+  "ring": "negacyclic",
+  "direction": "forward",
+  "architecture": "streamed",
+  "pe_count": 4,
+  "radix": 2,
+  "stage_groups": 1,
+  "reduction": "montgomery",
+  "profile": "baseline",
+  "protocol": "ready-valid",
+  "transpose": "indexed",
+  "multiplier_pipeline_stages": 3,
+  "reduction_pipeline_stages": 5,
+  "output_register": true
+}

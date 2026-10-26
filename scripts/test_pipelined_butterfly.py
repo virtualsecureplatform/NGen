@@ -9,8 +9,9 @@ from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
 
 
-def testbench(q: int,reduction: str) -> str:
-    width=q.bit_length();radix=1<<width;latency=7 if reduction=='montgomery' else 3
+def testbench(q: int,reduction: str,latency: int | None = None) -> str:
+    width=q.bit_length();radix=1<<width
+    if latency is None:latency=(9 if width>32 else 7) if reduction=='montgomery' else 3
     rng=random.Random(4291)
     operations=[(kind,a,b,c) for kind in (1,2,3) for a,b,c in ((0,0,0),(q-1,q-1,q-1),(q-1,1,1),(1,q-1,0),(q-1,q-2,1))]
     operations += [(rng.randrange(1,4),rng.randrange(q),rng.randrange(q),rng.randrange(q)) for _ in range(96)]
@@ -59,10 +60,15 @@ endmodule
 def main():
     with tempfile.TemporaryDirectory(prefix='ngen-pipeline-test.') as temporary:
         d=Path(temporary)
-        for q,reduction in [(17,r) for r in ('barrett','montgomery','shoup')]+[(q,'montgomery') for q in (2147484161,9007199255560193,18446744069414584321)]:
-            name=f'{reduction}-{q}';rtl=d/f'{name}.sv';tb=d/f'{name}_tb.sv';sim=d/name
-            subprocess.run(['bash',str(ROOT/'ngen.bat'),'-q',str(q),'-reduction',reduction,'-o',str(rtl),'butterflypipeline'],cwd=ROOT,check=True,stdout=subprocess.DEVNULL)
-            tb.write_text(testbench(q,reduction))
+        cases=[(17,r,None,None) for r in ('barrett','montgomery','shoup')]
+        cases += [(q,'montgomery',m,r) for q in (17,2147484161,9007199255560193,18446744069414584321)
+                  for m in (1,3) for r in (3,4,5)]
+        for q,reduction,m,r in cases:
+            name=f'{reduction}-{q}-M{m}-R{r}';rtl=d/f'{name}.sv';tb=d/f'{name}_tb.sv';sim=d/name
+            args=['bash',str(ROOT/'ngen.bat'),'-q',str(q),'-reduction',reduction,'-o',str(rtl)]
+            if m is not None:args+=['-multiplier-pipeline-stages',str(m),'-reduction-pipeline-stages',str(r)]
+            subprocess.run([*args,'butterflypipeline'],cwd=ROOT,check=True,stdout=subprocess.DEVNULL)
+            tb.write_text(testbench(q,reduction,2+m+r if m is not None else None))
             subprocess.run(['iverilog','-g2012','-s','test','-o',str(sim),str(rtl),str(tb)],check=True)
             subprocess.run(['vvp',str(sim)],check=True)
 

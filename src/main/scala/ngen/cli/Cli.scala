@@ -1,7 +1,7 @@
 package ngen.cli
 
 import ngen.algebra.{Domains, Modulus, NttDomain, TransformShape}
-import ngen.rtl.{ArchitectureKind, InterfaceKind, PresetBackend, ProfileName, ReductionChoice, StreamProtocol, TransposeKind}
+import ngen.rtl.{ArchitectureKind, InterfaceKind, PresetBackend, ProfileName, NttPipeline, ReductionChoice, StreamProtocol, TransposeKind}
 import ngen.transform.{DataOrder, GeneralNttAlgorithm, GeneralNttDomain, GeneralNttPlan, RnsBasis}
 import ngen.arithmetic.{FermatField, GeneralizedFermatField}
 
@@ -32,7 +32,8 @@ final case class GeneratorConfig(
     runtimeControl: Boolean,
     graph: Boolean,
     rtlGraph: Boolean,
-    stageGroups: Int = 1
+    stageGroups: Int = 1,
+    pipeline: NttPipeline = NttPipeline()
 ):
   val streamingWidth: Int = 1 << streamingLog
   val radix: Int = 1 << radixLog
@@ -42,6 +43,13 @@ final case class GeneratorConfig(
   require(domain.logSize % radixLog == 0, s"radix log $radixLog must divide transform log ${domain.logSize}")
   require(stageGroups >= 1 && stageGroups <= domain.logSize, "stage groups must be within 1..log2(N)")
   require(peCount.forall(_ > 0), "PE count must be positive")
+  require(!pipeline.configured || (domain.name == "custom" &&
+    (architecture == ArchitectureKind.Streamed || architecture == ArchitectureKind.Compact) &&
+    radixLog == 1 && reduction == ReductionChoice.Montgomery &&
+    protocol == StreamProtocol.ReadyValid && interfaceKind == InterfaceKind.Raw &&
+    transpose == TransposeKind.Indexed && !runtimeControl &&
+    (domain.shape == TransformShape.Cyclic || domain.shape == TransformShape.Negacyclic)),
+    "configurable pipelines require custom complete radix-2 streamed/compact Montgomery ready-valid raw indexed transforms without runtime control")
   require(profile != ProfileName.SplitBarrett ||
     (architecture == ArchitectureKind.FullyParallel && domain.name == "custom"),
     "split-barrett is restricted to custom fully-parallel transforms")
@@ -51,7 +59,7 @@ enum Command:
   case Plan(config: GeneratorConfig)
   case Capabilities
   case SwitchTranspose(inputCycleLog: Int, inputLaneLog: Int, dataWidth: Int, fixedRate: Boolean, ratePreserving: Boolean, output: Option[String], top: Option[String])
-  case ButterflyPipeline(modulus: Modulus, reduction: ReductionChoice, runtimeField: Boolean, output: Option[String], top: Option[String])
+  case ButterflyPipeline(modulus: Modulus, reduction: ReductionChoice, runtimeField: Boolean, output: Option[String], top: Option[String], pipeline: NttPipeline = NttPipeline())
   case RnsPolynomial(basis: RnsBasis, emitCrt: Boolean, output: Option[String], top: Option[String])
   case GeneralNtt(plan: GeneralNttPlan, output: Option[String], top: Option[String])
   case PrimeInfo(modulus: Modulus)
@@ -79,6 +87,9 @@ object Cli:
       |  -k <k>          log2 of the streaming width; defaults to n.
       |  -r <r>          log2 of the radix; custom domains default to radix 2.
       |  -stage-groups <u> Chain u buffered radix-2 PE engines (custom ready-valid streams).
+      |  -multiplier-pipeline-stages <1|3> Montgomery product arithmetic partition.
+      |  -reduction-pipeline-stages <3|4|5> Montgomery reduction arithmetic partition.
+      |  -output-register Add one elastic core output stage (custom ready-valid Montgomery).
       |  -pe <count>     Reusable butterfly PE count; defaults to max(1, K/2).
       |  -q <prime>      Field modulus for a custom domain (decimal or 0x hexadecimal).
       |  -fermat <m>     Classical Fermat field F_m; requires -n and supports m=0..4.
@@ -123,7 +134,7 @@ object Cli:
       |  raintt          Combined YATA forward/inverse benchmark wrapper.
       |  kyberpe         Combined Kyber PE1 forward/inverse wrapper.
       |  switchtranspose Generate a square or rectangular lane/time switch transpose.
-      |  butterflypipeline Generate a tagged three-stage modular butterfly pipeline.
+      |  butterflypipeline Generate a tagged modular butterfly pipeline.
       |  rnspolymul      Generate two NTTs, pointwise multiply, and INTT per RNS prime.
       |  generalntt      Generate a staged mixed-radix, four-step, or Bluestein transform.
       |  primeinfo       Classify -q and report hardware reduction properties.
@@ -163,6 +174,9 @@ object Cli:
     var convolutionRoot: Option[BigInt] = None
     var k: Option[Int] = None
     var r: Option[Int] = None
+    var multiplierStages: Option[Int] = None
+    var reductionStages: Option[Int] = None
+    var outputRegister = false
     var stageGroups = 1
     var peCount: Option[Int] = None
     var q: Option[BigInt] = None
@@ -208,6 +222,9 @@ object Cli:
         case "-convolution-root" => convolutionRoot = Some(integer(requiredValue(args, "-convolution-root")))
         case "-k" => k = Some(requiredValue(args, "-k").toInt)
         case "-r" => r = Some(requiredValue(args, "-r").toInt)
+        case "-multiplier-pipeline-stages" => multiplierStages = Some(requiredValue(args,"-multiplier-pipeline-stages").toInt)
+        case "-reduction-pipeline-stages" => reductionStages = Some(requiredValue(args,"-reduction-pipeline-stages").toInt)
+        case "-output-register" => outputRegister = true
         case "-pe" => peCount = Some(requiredValue(args, "-pe").toInt)
         case "-q" => q = Some(integer(requiredValue(args, "-q")))
         case "-fermat" => fermatIndex = Some(requiredValue(args, "-fermat").toInt)
@@ -250,6 +267,9 @@ object Cli:
           terminal = Some(value)
         case unknown => throw new IllegalArgumentException(s"unknown argument: $unknown")
 
+    val pipeline = NttPipeline(multiplierStages,reductionStages,outputRegister)
+    require(!pipeline.configured || terminal.exists(Set("ntt","intt","butterflypipeline")),
+      "pipeline controls are supported only for custom ntt/intt or Montgomery butterflypipeline")
     terminal match
       case Some("help") => Command.Help
       case Some("presets") => Command.Presets
@@ -274,7 +294,9 @@ object Cli:
         require(preset.isEmpty && n.isEmpty && root.isEmpty && psi.isEmpty && baseCase.isEmpty && peCount.isEmpty,
           "butterflypipeline uses -q and -reduction")
         require(reduction != ReductionChoice.Auto, "butterflypipeline requires -reduction barrett, montgomery, or shoup")
-        Command.ButterflyPipeline(Modulus(q.getOrElse(throw new IllegalArgumentException("butterflypipeline requires -q"))), reduction, runtimeField, output, top)
+        require(!pipeline.configured || (reduction == ReductionChoice.Montgomery && !runtimeField && !outputRegister),
+          "butterflypipeline controls require Montgomery, no runtime field, and no core output register")
+        Command.ButterflyPipeline(Modulus(q.getOrElse(throw new IllegalArgumentException("butterflypipeline requires -q"))), reduction, runtimeField, output, top, pipeline)
       case Some("rnspolymul") =>
         val logSize = n.getOrElse(throw new IllegalArgumentException("rnspolymul requires -n"))
         val moduli = rnsModuli.getOrElse(throw new IllegalArgumentException("rnspolymul requires -rns-q"))
@@ -379,7 +401,8 @@ object Cli:
             runtimeControl,
             graph,
             rtlGraph,
-            stageGroups
+            stageGroups,
+            pipeline
           )
         )
       case _ => throw new IllegalArgumentException("a transform name is required")

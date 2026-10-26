@@ -1,7 +1,7 @@
 package ngen.backend
 
 import ngen.arithmetic.{BarrettField, ShoupField}
-import ngen.rtl.{PeNttSchedule, PeOperationKind, ProfileName, ReductionKind, StreamProtocol}
+import ngen.rtl.{PeNttSchedule, PeOperationKind, ProfileName, NttPipeline, ReductionKind, StreamProtocol}
 
 object PeStreamingNttSystemVerilog:
   final case class Metrics(
@@ -21,12 +21,12 @@ object PeStreamingNttSystemVerilog:
 
   def usesBlockControl(schedule: PeNttSchedule, runtimeControl: Boolean = false): Boolean = registeredIssue(schedule) && !runtimeControl
 
-  def metrics(schedule: PeNttSchedule, streamingWidth: Int, profile: ProfileName, reduction: ReductionKind = ReductionKind.Barrett): Metrics =
+  def metrics(schedule: PeNttSchedule, streamingWidth: Int, profile: ProfileName, reduction: ReductionKind = ReductionKind.Barrett, pipeline: NttPipeline = NttPipeline()): Metrics =
     val streamCycles = schedule.plan.domain.size / streamingWidth
     val gap = if profile == ProfileName.F300 then 1 else 0
     val stageCount = schedule.bundles.map(_.stage).distinct.size
     val executionCycles =
-      if schedule.radix == 2 then 1 + schedule.bundles.size + (PipelinedButterflySystemVerilog.latency(reduction, schedule.plan.domain.modulus.bitWidth) + 2 + (if registeredIssue(schedule) then 1 else 0)) * stageCount
+      if schedule.radix == 2 then 1 + schedule.bundles.size + (PipelinedButterflySystemVerilog.latency(reduction, schedule.plan.domain.modulus.bitWidth,pipeline) + 2 + (if registeredIssue(schedule) then 1 else 0)) * stageCount
       else 1 + (3 + schedule.radixLog) * schedule.bundles.size + math.max(0, schedule.bundles.size - 1) * gap
     val latency = streamCycles + executionCycles + (if schedule.radix == 2 then 3 else 2)
     // Worst frame-admission interval with continuously ready output. Each banked
@@ -49,7 +49,8 @@ object PeStreamingNttSystemVerilog:
       profile: ProfileName,
       reduction: ReductionKind,
       protocol: StreamProtocol = StreamProtocol.NextPulse,
-      runtimeControl: Boolean = false
+      runtimeControl: Boolean = false,
+      pipeline: NttPipeline = NttPipeline()
   ): String =
     require(top.matches("[A-Za-z_][A-Za-z0-9_$]*"), s"invalid SystemVerilog module name: $top")
     require(Set(ReductionKind.Barrett, ReductionKind.Montgomery, ReductionKind.Shoup, ReductionKind.FermatShift,ReductionKind.SparseFold)(reduction))
@@ -61,7 +62,7 @@ object PeStreamingNttSystemVerilog:
     val radixLog = schedule.radixLog
     val peCount = schedule.peCount
     val mapping = schedule.mapping
-    val generatedMetrics = metrics(schedule, streamingWidth, profile)
+    val generatedMetrics = metrics(schedule, streamingWidth, profile,reduction,pipeline)
     val streamCycles = generatedMetrics.inputCycles
     val gap = if profile == ProfileName.F300 then 1 else 0
     val barrett = BarrettField(field)
@@ -397,7 +398,7 @@ object PeStreamingNttSystemVerilog:
       s"if(${retirePrefix}output_valid_${pe}_${output})begin ${bankCase(s"${retirePrefix}output_bank_${pe}_${output}") { bank =>
         s"if(exec_buffer)begin ${portName(1,bank,"write_enable")}=1;${portName(1,bank,"write_address")}=${retirePrefix}output_row_${pe}_${output};${portName(1,bank,"write_data")}=pe_out_${pe}_$output;end else begin ${portName(0,bank,"write_enable")}=1;${portName(0,bank,"write_address")}=${retirePrefix}output_row_${pe}_${output};${portName(0,bank,"write_data")}=pe_out_${pe}_$output;end"
       }} end").mkString(" ")
-    val pipelineDefinition = if radix == 2 then PipelinedButterflySystemVerilog.emit(field,reduction,"NGenInternalPipelinedButterfly") else ""
+    val pipelineDefinition = if radix == 2 then PipelinedButterflySystemVerilog.emit(field,reduction,"NGenInternalPipelinedButterfly",pipeline=pipeline) else ""
     val pipelineRetire = if radix == 2 then "pe_pipeline_valid_0" else "pe_fused_valid_0"
     val writePhase = 3
     val pipelineLaunchTransition = "else if(exec_phase==2)exec_phase<=3;"

@@ -2,18 +2,19 @@ package ngen.backend
 
 import ngen.algebra.Modulus
 import ngen.arithmetic.BarrettField
-import ngen.rtl.ReductionKind
+import ngen.rtl.{ReductionKind, NttPipeline}
 
 /** One-operation-per-cycle modular radix-2 butterfly pipelines. */
 object PipelinedButterflySystemVerilog:
   val Latency = 3
-  def latency(reduction: ReductionKind, width: Int = 32): Int =
-    if reduction == ReductionKind.Montgomery then MontgomeryButterflySystemVerilog.latency(width) else Latency
+  def latency(reduction: ReductionKind, width: Int = 32, pipeline: NttPipeline = NttPipeline()): Int =
+    if reduction == ReductionKind.Montgomery then MontgomeryButterflySystemVerilog.latency(width,pipeline) else Latency
 
-  def emit(field: Modulus, reduction: ReductionKind, top: String = "NGenPipelinedButterfly", runtimeField: Boolean = false): String =
+  def emit(field: Modulus, reduction: ReductionKind, top: String = "NGenPipelinedButterfly", runtimeField: Boolean = false, pipeline: NttPipeline = NttPipeline()): String =
+    require(!pipeline.configured || reduction == ReductionKind.Montgomery, "configurable arithmetic requires Montgomery")
     require(Set(ReductionKind.Barrett, ReductionKind.Montgomery, ReductionKind.Shoup, ReductionKind.FermatShift)(reduction))
     require(!runtimeField || reduction == ReductionKind.Barrett, "runtime modulus loading currently uses the generic Barrett pipeline")
-    if reduction == ReductionKind.Montgomery then return MontgomeryButterflySystemVerilog.emit(field,top)
+    if reduction == ReductionKind.Montgomery then return MontgomeryButterflySystemVerilog.emit(field,top,pipeline)
     val width = field.bitWidth
     val radix = BigInt(1) << width
     val qInv = (-field.q.modInverse(radix)).mod(radix)

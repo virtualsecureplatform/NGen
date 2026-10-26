@@ -26,7 +26,7 @@ CHOICES = dict(direction=('forward','inverse'), ring=('cyclic','negacyclic'),
 def normalize(spec):
     """Use actual sizes/counts; concrete backend legality is decided by NGen."""
     required = {'schema','transform_size','streaming_width','modulus'}
-    allowed = required | set(DEFAULTS) | {'pe_count'}
+    allowed = required | set(DEFAULTS) | {'pe_count','multiplier_pipeline_stages','reduction_pipeline_stages','output_register'}
     if not isinstance(spec,dict) or set(spec)-allowed or required-set(spec):
         raise ValueError('expected schema, transform_size, streaming_width, modulus and documented optional fields')
     if spec['schema'] != SCHEMA:
@@ -41,6 +41,11 @@ def normalize(spec):
     for name in ('stage_groups','pe_count'):
         if name in c and (type(c[name]) is not int or c[name]<1):
             raise ValueError(name+' must be a positive integer')
+    for name,values in [('multiplier_pipeline_stages',(1,3)),('reduction_pipeline_stages',(3,4,5))]:
+        if name in c and (type(c[name]) is not int or c[name] not in values):
+            raise ValueError('unsupported '+name)
+    if 'output_register' in c and type(c['output_register']) is not bool:
+        raise ValueError('output_register must be a Boolean')
     for name,values in CHOICES.items():
         if c[name] not in values:
             raise ValueError('invalid '+name)
@@ -66,8 +71,11 @@ def arguments(c):
                       ('architecture','-architecture'),('reduction','-reduction'),
                       ('profile','-profile'),('protocol','-protocol'),('transpose','-transpose'),
                       ('input_order','-input-order'),('output_order','-output-order'),
-                      ('pe_count','-pe'),('stage_groups','-stage-groups')]:
+                      ('pe_count','-pe'),('stage_groups','-stage-groups'),
+                      ('multiplier_pipeline_stages','-multiplier-pipeline-stages'),
+                      ('reduction_pipeline_stages','-reduction-pipeline-stages')]:
         if name in c:result += [flag,str(c[name])]
+    if c.get('output_register',False):result += ['-output-register']
     if c['interface']!='raw':result += ['-interface',c['interface']]
     return result
 
