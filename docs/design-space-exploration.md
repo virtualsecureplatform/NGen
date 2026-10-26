@@ -65,6 +65,7 @@ Generation creates a new directory and refuses to overwrite an existing one.
 | `direction`, `ring` | `forward` / `inverse`; `negacyclic` / `cyclic`. Defaults: forward negacyclic. |
 | `root`, `psi` | Positive integers/decimal strings or `auto`. Defaults: auto; psi is allowed only for negacyclic requests. |
 | `architecture` | `streamed`, `compact`, `stage-parallel`, `fully-parallel`, or `full-throughput`. Default: streamed. |
+| `frame_overlap` | Optional Boolean. Enables overlapping stage-parallel frames; generic `full-throughput` with ready-valid selects the same mode automatically. See [frame overlap](frame-overlap.md). |
 | `pe_count`, `radix`, `stage_groups` | Actual counts/values. PE count is omitted by default so the generator chooses it; radix defaults to 2, stage groups to 1. |
 | `multiplier_pipeline_stages`, `reduction_pipeline_stages`, `output_register` | Optional native NTT controls: 1/3 main-product stages, 3/4/5 reduction stages, and an elastic output register. See [pipeline controls](pipeline-controls.md) for restrictions, defaults, and real arithmetic partitions. |
 | `reduction`, `profile` | Defaults: `montgomery`, `baseline`; legal alternatives come from `capabilities` and concrete lowering. |
@@ -73,8 +74,8 @@ Generation creates a new directory and refuses to overwrite an existing one.
 
 The adapter normalizes types and actual sizes. It deliberately delegates
 backend-specific legality, field/root validation, and lowering to NGen. For
-example, a stage-parallel request needs `protocol: next`, radix 2, and no
-`pe_count`. Do not populate every optional field using defaults from another
+example, historical stage-parallel uses `protocol: next`, radix 2, and no
+`pe_count`. With `frame_overlap: true`, it uses `protocol: ready-valid` instead. Do not populate every optional field using defaults from another
 architecture. This interface covers custom complete power-of-two NTT/INTT
 transforms; presets and incomplete transforms remain accessible through the
 native CLI.
@@ -83,7 +84,7 @@ native CLI.
 | --- | --- |
 | `status` | `planned`, `generated`, `lowering-failed`, `timeout`, `generator-changed`, `artifact-error`, or `request-error`. |
 | `candidate_id` | SHA-256 of the normalized requested configuration, generator executable hash, and adapter hash. Plan/generate share the identity for the same inputs. |
-| `configuration` | Normalized request, retaining actual N/L/R values and field values as decimal strings. |
+| `configuration` | Normalized request, retaining actual N/L/R values and field values as decimal strings; the ready-valid full-throughput alias canonicalizes to stage-parallel with frame overlap. |
 | `metadata` | Native declared design metadata when lowering succeeds, including resolved architecture and cycle contracts. |
 | `generator_sha256`, `adapter_sha256` | Executable and adapter identity; retain source revision/build provenance separately in your experiment manifest. |
 | `command`, `returncode`, `stdout`, `stderr` | The executed command and available process diagnostics. Timeout/request errors may not have all process fields. |
@@ -171,8 +172,9 @@ candidate rather than transferring constraints between families.
 | Backend | Architecture meaning | Useful controls and important restrictions |
 | --- | --- | --- |
 | `streamed` / `compact` | Reusable banked butterfly PEs; these names select the hardware-reusing custom path. | Sweep lanes, PEs, radix, reduction, and profile subject to lowering constraints. Radix logarithm must divide `log2(N)`. |
-| `stage-parallel` | Unrolled radix-2 stage datapaths with registered stage boundaries. | Complete cyclic/negacyclic transforms, `-r 1`, `-protocol next`, no `-pe` override and no runtime-control override. Do not pass the streamed PE axis to this backend. |
-| `fully-parallel` / generic `full-throughput` | Acyclic parallel custom datapath. | Requires K=N, radix 2, natural stream order, complete transform, and no PE override. Preset full-throughput implementations have their own rules. |
+| `stage-parallel` | Spatial radix-2 stage arithmetic; historical frames are serialized through shared work registers. Optional `frame_overlap` gives each stage its own frame registers. | Complete cyclic/negacyclic transforms, radix 2, no PE/runtime-control override. Historical mode uses `next`; frame overlap requires baseline, ready-valid, raw/indexed, and one group. |
+| `fully-parallel` / historical generic `full-throughput` with `next` | Acyclic parallel custom datapath. | Requires K=N, radix 2, natural stream order, complete transform, and no PE override. |
+| Generic `full-throughput` with `ready-valid` | Maximum-overlap stage-parallel pipeline, equivalent to `stage-parallel` with `frame_overlap`. | Supports streaming K<N; same restrictions as overlapped stages. Preset full-throughput paths keep their own rules. |
 | `auto` | Chooses a lowering from the request. | Useful for interactive use; prefer an explicit backend when studying architecture effects. Record the resolved metadata architecture. |
 
 For grouped streamed designs (`U > 1`), use a complete radix-2 transform,

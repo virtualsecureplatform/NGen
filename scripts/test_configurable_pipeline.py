@@ -27,26 +27,26 @@ reg clock=0,reset=1,in_valid=0,out_ready=0;wire in_ready,out_valid;
 {declarations}
 reg [{width-1}:0] source[0:{len(flat_in)-1}],expected[0:{len(flat_out)-1}];
 integer sent=0,received=0,cycle=0,first_input=-1,first_output=-1,second_output=-1;
-reg epoch={0 if abort else 1};
+reg epoch={0 if abort else 1};reg source_stalled=0;
 main dut(.clock(clock),.reset(reset),.in_valid(in_valid),.in_ready(in_ready),.out_valid(out_valid),.out_ready(out_ready),{ports});
 always #5 clock=~clock;
 always @(negedge clock)begin
  if(reset)begin in_valid=0;out_ready=0;end
  else begin
   out_ready={"cycle%5!=0 && cycle%5!=1" if stalls else "1"};
-  if(!in_valid || in_ready)begin
-   in_valid=sent<((epoch)?{3*beats}:{beats}) && {"cycle%7!=2" if stalls else "1"};
-   if(sent<{3*beats})begin {drive} end
+  if(!source_stalled)begin
+   in_valid=sent<((epoch)?{len(inputs)*beats}:{beats}) && {"cycle%7!=2" if stalls else "1"};
+   if(sent<{len(inputs)*beats})begin {drive} end
   end
  end
 end
 always @(posedge clock)begin
- if(reset)begin sent=0;received=0;cycle=0;first_input=-1;first_output=-1;second_output=-1;end
+ if(reset)begin sent=0;received=0;cycle=0;first_input=-1;first_output=-1;second_output=-1;source_stalled=0;end
  else begin
-  cycle=cycle+1;
+  cycle=cycle+1;source_stalled=in_valid && !in_ready;
   if(in_valid&&in_ready)begin if(sent==0)first_input=cycle;sent=sent+1;end
   if(out_valid)begin
-   if(received>={3*beats})$fatal(1,"extra output");
+   if(received>={len(inputs)*beats})$fatal(1,"extra output");
    {check}
    if(out_ready)begin
     if(received==0)first_output=cycle;
@@ -54,7 +54,7 @@ always @(posedge clock)begin
     received=received+1;
    end
   end
-  if(epoch&&received=={3*beats})begin
+  if(epoch&&received=={len(inputs)*beats})begin
    $display("MEASURE latency=%0d interval=%0d",first_output-first_input,second_output-first_output);$finish;
   end
  end

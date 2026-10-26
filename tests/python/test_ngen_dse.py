@@ -45,6 +45,12 @@ class DirectDSETests(unittest.TestCase):
                        {'reduction_pipeline_stages':0},{'output_register':1}):
             with self.assertRaises(ValueError):dse.normalize({**self.design,**change})
 
+    def test_frame_overlap_is_boolean_and_forwarded(self):
+        c=dse.normalize({**self.design,'frame_overlap':True})
+        self.assertIn('-frame-overlap',dse.arguments(c))
+        with self.assertRaises(ValueError):dse.normalize({**self.design,'frame_overlap':1})
+        with self.assertRaises(ValueError):dse.normalize({**self.design,'architecture':'full-throughput','frame_overlap':False})
+
     def test_cyclic_does_not_receive_negacyclic_twist(self):
         c=dse.normalize({**self.design,'ring':'cyclic'})
         self.assertNotIn('-psi',dse.arguments(c))
@@ -117,6 +123,16 @@ class DirectDSETests(unittest.TestCase):
             request.write_text(json.dumps(changed));self.assertEqual(cli('plan')['status'],'planned')
             changed['direction']='inverse';request.write_text(json.dumps(changed))
             self.assertEqual(cli('plan')['metadata']['direction'],'inverse')
+            changed.update(protocol='ready-valid',frame_overlap=True)
+            request.write_text(json.dumps(changed))
+            overlap=cli('plan')
+            self.assertEqual(overlap['metadata']['initiation_interval'],8)
+            self.assertTrue(overlap['metadata']['full_throughput'])
+            changed.pop('frame_overlap');changed['architecture']='full-throughput'
+            request.write_text(json.dumps(changed))
+            alias=cli('plan')
+            self.assertEqual(alias['metadata']['architecture'],overlap['metadata']['architecture'])
+            self.assertEqual(alias['candidate_id'],overlap['candidate_id'])
 
     def test_capabilities_json_has_no_task_dependency(self):
         p=subprocess.run(['python3',str(ROOT/'scripts/ngen_dse.py'),'capabilities'],

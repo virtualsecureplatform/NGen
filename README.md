@@ -29,6 +29,22 @@ request/result contract, concrete legality checks, architecture naming, Python
 integration, and a runnable grid sweep. NGen generates transforms; your framework
 supplies workload qualification and target measurements.
 
+## Overlap frames in a stage-parallel NTT
+
+Generic `full-throughput` with `ready-valid` selects the maximum-overlap
+stage-parallel implementation: each NTT stage owns frame registers and can work
+on a different frame. It accepts back-to-back input frames at N/L cycles per
+frame without downstream stalls; L does not need to equal N. The equivalent
+explicit request is `stage-parallel` with `-frame-overlap`.
+
+```bash
+python3 scripts/ngen_dse.py plan --spec examples/dse/ntt512-overlapped.json
+```
+
+See [frame overlap](docs/frame-overlap.md) for constraints, metadata, and measured
+simulation checks. Historical `stage-parallel` without the flag and generic
+`full-throughput` with the next-pulse protocol retain their original behavior.
+
 ## Configure NTT arithmetic pipelines
 
 The [pipeline controls](docs/pipeline-controls.md) expose
@@ -114,15 +130,18 @@ one buffer while the next transform executes. The default PE count is
 number of scheduled butterflies.
 
 `-architecture stage-parallel` is also available for arbitrary complete cyclic
-or negacyclic domains. It emits one registered boundary per radix-2 NTT stage
-and groups all butterflies in that stage behind the boundary. Barrett,
+or negacyclic domains. The historical controller selects one radix-2 stage at a time into shared frame
+registers, with all butterflies of the selected stage operating in parallel.
+The opt-in frame-overlap mode gives each stage independent registers. Barrett,
 Montgomery, and Shoup reductions are supported, as are natural or bit-reversed
 stream orders. This is a fully unrolled stage datapath, so it is a useful
 throughput/timing baseline and a substrate for later banked or PE-limited
 implementations; incomplete Kyber-style plans and Fermat-shift reduction remain
 on the streamed backend.
-For custom stage-parallel designs, select `-r 1 -protocol next` and omit
-`-pe`; this backend does not accept the streamed PE override or runtime control.
+For historical custom stage-parallel designs, select `-r 1 -protocol next` and
+omit `-pe`. Select `-frame-overlap -protocol ready-valid` for overlapping frames;
+see the restrictions above. Neither mode accepts the streamed PE override or
+runtime control.
 Use `plan` to validate the complete option set before generation.
 For Barrett, Montgomery, and Shoup reduction, each butterfly is emitted as
 structural combinational logic with constant-wired twiddle inputs. Capture and

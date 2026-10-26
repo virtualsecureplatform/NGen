@@ -15,7 +15,7 @@ class StageParallelNttSystemVerilogSpec extends AnyFunSuite:
     assert(!rtl.contains("BARRETT_MU"))
   private val domain = NttDomain("stage", 8, Modulus(17), 9, TransformShape.Cyclic)
 
-  test("generic stage-parallel lowering emits one registered boundary per NTT stage"):
+  test("legacy stage-parallel lowering retains serialized stage selection and structural butterflies"):
     val plan = NttPlan.radix2(domain, inverse = false)
     assert(StageParallelNttSystemVerilog.stageCount(plan) == 3)
     val rtl = StageParallelNttSystemVerilog.emit(plan, 2, "StageNtt", ProfileName.Baseline, ReductionKind.Barrett)

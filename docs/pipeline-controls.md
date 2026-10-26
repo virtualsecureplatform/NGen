@@ -135,3 +135,7 @@ one/two stage groups, all arithmetic partitions, output registration, input
 bubbles, output backpressure, reset during an active frame, and independently
 measured latency changes versus declared metadata. Existing default emitters
 remain in use for the original arithmetic configuration.
+
+Frame overlap is a separate NTT-level choice. See [frame overlap](frame-overlap.md)
+for the stage-parallel/full-throughput mode; the configurable Montgomery PE
+arithmetic partitions above do not yet apply to that spatial backend.

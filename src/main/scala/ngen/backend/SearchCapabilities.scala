@@ -14,6 +14,13 @@ object SearchCapabilities:
       "profiles":["baseline","f300","split-barrett"],
       "profile_constraints":"split-barrett requires custom fully-parallel architecture",
       "protocols":["next","ready-valid"],
+      "frame_overlap":{
+        "values":[false,true],
+        "default":false,
+        "constraints":"custom complete radix-2 stage-parallel/full-throughput baseline ready-valid raw indexed; no PE override; one group; Barrett/Montgomery/Shoup",
+        "full_throughput_alias":"generic full-throughput with ready-valid selects overlapped stage-parallel",
+        "initiation_interval":"N / streaming_width without stalls"
+      },
       "stage_groups":{"min":1,"max":"log2(N)","constraints":"groups > 1 require complete radix-2 custom streamed/compact ready-valid raw indexed designs"},
       "pipeline_controls":{
         "multiplier_pipeline_stages":[1,3],

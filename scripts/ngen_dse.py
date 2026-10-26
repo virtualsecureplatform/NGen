@@ -26,7 +26,7 @@ CHOICES = dict(direction=('forward','inverse'), ring=('cyclic','negacyclic'),
 def normalize(spec):
     """Use actual sizes/counts; concrete backend legality is decided by NGen."""
     required = {'schema','transform_size','streaming_width','modulus'}
-    allowed = required | set(DEFAULTS) | {'pe_count','multiplier_pipeline_stages','reduction_pipeline_stages','output_register'}
+    allowed = required | set(DEFAULTS) | {'pe_count','multiplier_pipeline_stages','reduction_pipeline_stages','output_register','frame_overlap'}
     if not isinstance(spec,dict) or set(spec)-allowed or required-set(spec):
         raise ValueError('expected schema, transform_size, streaming_width, modulus and documented optional fields')
     if spec['schema'] != SCHEMA:
@@ -44,11 +44,17 @@ def normalize(spec):
     for name,values in [('multiplier_pipeline_stages',(1,3)),('reduction_pipeline_stages',(3,4,5))]:
         if name in c and (type(c[name]) is not int or c[name] not in values):
             raise ValueError('unsupported '+name)
-    if 'output_register' in c and type(c['output_register']) is not bool:
-        raise ValueError('output_register must be a Boolean')
+    for name in ('output_register','frame_overlap'):
+        if name in c and type(c[name]) is not bool:
+            raise ValueError(name+' must be a Boolean')
     for name,values in CHOICES.items():
         if c[name] not in values:
             raise ValueError('invalid '+name)
+    # Canonicalize the maximum-overlap alias before assigning candidate identity.
+    if c['architecture']=='full-throughput' and c['protocol']=='ready-valid':
+        if c.get('frame_overlap') is False:
+            raise ValueError('full-throughput ready-valid requires frame overlap')
+        c.update(architecture='stage-parallel',frame_overlap=True)
     for name in ('modulus','root','psi'):
         value=c[name]
         if name!='modulus' and value=='auto':continue
@@ -75,6 +81,7 @@ def arguments(c):
                       ('multiplier_pipeline_stages','-multiplier-pipeline-stages'),
                       ('reduction_pipeline_stages','-reduction-pipeline-stages')]:
         if name in c:result += [flag,str(c[name])]
+    if c.get('frame_overlap',False):result += ['-frame-overlap']
     if c.get('output_register',False):result += ['-output-register']
     if c['interface']!='raw':result += ['-interface',c['interface']]
     return result

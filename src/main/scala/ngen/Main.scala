@@ -303,6 +303,7 @@ object Main:
         case ArchitectureKind.FullyParallel =>
           require(fullyParallelCompatible, "fully-parallel custom RTL requires K=N, radix 2, natural stream order, a complete transform, and no -pe override")
           true
+        case ArchitectureKind.FullThroughput if config.overlappedStages => false
         case ArchitectureKind.FullThroughput =>
           require(fullyParallelCompatible,
             "generic full-throughput currently requires K=N, radix 2, natural stream order, a complete transform, and no PE override")
@@ -332,7 +333,24 @@ object Main:
         ,"lazy_correction_points"->arithmeticPlan.lazySchedule.correctionAfter.size
       )
       val architecture =
-        if useStageParallel then
+        if config.overlappedStages then
+          val plan=NttPlan.radix2(config.domain,inverse,config.inputOrder,config.outputOrder)
+          require(Set(ReductionKind.Barrett,ReductionKind.Montgomery,ReductionKind.Shoup)(reductionKind),
+            "frame-overlapped stages require Barrett, Montgomery, or Shoup reduction")
+          Files.writeString(output,ngen.backend.OverlappedStageNttSystemVerilog.emit(plan,config.streamingWidth,top,reductionKind))
+          val cycles=config.domain.size/config.streamingWidth
+          val stages=plan.stages.size
+          architectureParameters ++= Map("frame_overlap"->1,"stage_count"->stages,
+            "frame_register_slots"->(stages+1),"coefficient_buffers"->(stages+1))
+          Architecture(
+            s"custom-${if inverse then "intt" else "ntt"}-stage-parallel-overlapped-full-throughput",
+            Vector(Port("clock",PortDirection.Input,ValueFormat.Valid),Port("reset",PortDirection.Input,ValueFormat.Valid),
+              Port("in_valid",PortDirection.Input,ValueFormat.Valid),Port("in_ready",PortDirection.Output,ValueFormat.Valid),
+              Port("out_valid",PortDirection.Output,ValueFormat.Valid),Port("out_ready",PortDirection.Input,ValueFormat.Valid)),
+            Vector.empty,Vector.empty,Vector.empty,
+            StreamingContract(config.domain.size,config.streamingWidth,cycles,cycles,cycles+stages,cycles),
+            reductionKind,profile)
+        else if useStageParallel then
           require(config.domain.shape == ngen.algebra.TransformShape.Cyclic || config.domain.shape == ngen.algebra.TransformShape.Negacyclic,
             "stage-parallel architecture requires a complete cyclic or negacyclic transform")
           require(config.protocol == StreamProtocol.NextPulse, "stage-parallel architecture currently requires the next-pulse protocol")

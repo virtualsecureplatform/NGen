@@ -33,7 +33,8 @@ final case class GeneratorConfig(
     graph: Boolean,
     rtlGraph: Boolean,
     stageGroups: Int = 1,
-    pipeline: NttPipeline = NttPipeline()
+    pipeline: NttPipeline = NttPipeline(),
+    frameOverlap: Boolean = false
 ):
   val streamingWidth: Int = 1 << streamingLog
   val radix: Int = 1 << radixLog
@@ -43,6 +44,14 @@ final case class GeneratorConfig(
   require(domain.logSize % radixLog == 0, s"radix log $radixLog must divide transform log ${domain.logSize}")
   require(stageGroups >= 1 && stageGroups <= domain.logSize, "stage groups must be within 1..log2(N)")
   require(peCount.forall(_ > 0), "PE count must be positive")
+  def overlappedStages: Boolean = frameOverlap || (domain.name == "custom" && architecture == ArchitectureKind.FullThroughput && protocol == StreamProtocol.ReadyValid)
+  require(!overlappedStages || (domain.name == "custom" &&
+    (architecture == ArchitectureKind.StageParallel || architecture == ArchitectureKind.FullThroughput) &&
+    radixLog == 1 && peCount.isEmpty && stageGroups == 1 && !runtimeControl &&
+    protocol == StreamProtocol.ReadyValid && interfaceKind == InterfaceKind.Raw &&
+    transpose == TransposeKind.Indexed && profile == ProfileName.Baseline &&
+    (domain.shape == TransformShape.Cyclic || domain.shape == TransformShape.Negacyclic)),
+    "frame overlap requires custom complete radix-2 stage-parallel baseline ready-valid raw indexed transforms, no PE override, one group, and no runtime control")
   require(!pipeline.configured || (domain.name == "custom" &&
     (architecture == ArchitectureKind.Streamed || architecture == ArchitectureKind.Compact) &&
     radixLog == 1 && reduction == ReductionChoice.Montgomery &&
@@ -89,6 +98,7 @@ object Cli:
       |  -stage-groups <u> Chain u buffered radix-2 PE engines (custom ready-valid streams).
       |  -multiplier-pipeline-stages <1|3> Montgomery product arithmetic partition.
       |  -reduction-pipeline-stages <3|4|5> Montgomery reduction arithmetic partition.
+      |  -frame-overlap Overlap frames in custom stage-parallel ready-valid cores.
       |  -output-register Add one elastic core output stage (custom ready-valid Montgomery).
       |  -pe <count>     Reusable butterfly PE count; defaults to max(1, K/2).
       |  -q <prime>      Field modulus for a custom domain (decimal or 0x hexadecimal).
@@ -177,6 +187,7 @@ object Cli:
     var multiplierStages: Option[Int] = None
     var reductionStages: Option[Int] = None
     var outputRegister = false
+    var frameOverlap = false
     var stageGroups = 1
     var peCount: Option[Int] = None
     var q: Option[BigInt] = None
@@ -225,6 +236,7 @@ object Cli:
         case "-multiplier-pipeline-stages" => multiplierStages = Some(requiredValue(args,"-multiplier-pipeline-stages").toInt)
         case "-reduction-pipeline-stages" => reductionStages = Some(requiredValue(args,"-reduction-pipeline-stages").toInt)
         case "-output-register" => outputRegister = true
+        case "-frame-overlap" => frameOverlap = true
         case "-pe" => peCount = Some(requiredValue(args, "-pe").toInt)
         case "-q" => q = Some(integer(requiredValue(args, "-q")))
         case "-fermat" => fermatIndex = Some(requiredValue(args, "-fermat").toInt)
@@ -267,6 +279,7 @@ object Cli:
           terminal = Some(value)
         case unknown => throw new IllegalArgumentException(s"unknown argument: $unknown")
 
+    require(!frameOverlap || terminal.exists(Set("ntt","intt")), "frame overlap is supported only for custom ntt/intt")
     val pipeline = NttPipeline(multiplierStages,reductionStages,outputRegister)
     require(!pipeline.configured || terminal.exists(Set("ntt","intt","butterflypipeline")),
       "pipeline controls are supported only for custom ntt/intt or Montgomery butterflypipeline")
@@ -402,7 +415,8 @@ object Cli:
             graph,
             rtlGraph,
             stageGroups,
-            pipeline
+            pipeline,
+            frameOverlap
           )
         )
       case _ => throw new IllegalArgumentException("a transform name is required")
