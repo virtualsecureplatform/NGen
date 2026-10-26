@@ -9,6 +9,14 @@ Acyclic datapaths use `TimedGraph`; stateful streaming designs use the shared
 `MicroProgram` IR, which preserves dependency order while packing independent
 operations into the configured hardware width.
 
+## Build a custom design space exploration framework
+
+Start with the [external DSE integration guide](docs/design-space-exploration.md).
+It covers machine-readable capability discovery, concrete legality checks,
+architecture/parameter naming, a runnable twelve-design Python sweep, metadata,
+and the evaluation/cache contract for grid or LLM-based search. NGen generates
+transforms; your framework supplies workload qualification and target measurements.
+
 ## Supported designs
 
 | Preset | Configuration | Generated interface |
@@ -62,9 +70,11 @@ sbt test assembly
 ```
 
 Options precede the terminal transform. `-n`, `-k`, and `-r` are base-2
-logarithms. Pipeline profiles are `baseline` and `f300`; the latter adds a
-scheduling gap between microcoded bundles or uses the deeper generic graph
-latencies. `f300` is a pipeline intent, not a vendor timing guarantee.
+logarithms. Pipeline profiles include `baseline`, `f300`, and `split-barrett`.
+`f300` adds a
+scheduling gap between microcoded bundles or uses deeper generic graph latencies;
+it is a pipeline intent, not a vendor timing guarantee. `split-barrett` requires
+the custom fully-parallel architecture. Validate combinations with `plan`.
 
 For custom domains, `-architecture auto|full-throughput|compact|fully-parallel|streamed|stage-parallel` controls the
 lowering. `auto` preserves the fully-parallel v0.1 implementation when `K=N`
@@ -90,6 +100,9 @@ stream orders. This is a fully unrolled stage datapath, so it is a useful
 throughput/timing baseline and a substrate for later banked or PE-limited
 implementations; incomplete Kyber-style plans and Fermat-shift reduction remain
 on the streamed backend.
+For custom stage-parallel designs, select `-r 1 -protocol next` and omit
+`-pe`; this backend does not accept the streamed PE override or runtime control.
+Use `plan` to validate the complete option set before generation.
 For Barrett, Montgomery, and Shoup reduction, each butterfly is emitted as
 structural combinational logic with constant-wired twiddle inputs. Capture and
 output scaling each share one multiplier per active lane; Montgomery output
@@ -386,3 +399,7 @@ between 1 and log2(N). Non-square, partially filled stage groups are supported.
 files and prints metadata without leaving a generated design in the output path.
 Metadata contains declared core timing; the external architecture-search runner
 measures RTL timing independently and accounts for its registered boundary.
+
+See the [DSE integration guide](docs/design-space-exploration.md) for a runnable
+external driver and the distinction between declared core timing, independently
+measured RTL cycles, and target-qualified throughput.
