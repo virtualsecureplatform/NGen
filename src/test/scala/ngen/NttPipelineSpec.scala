@@ -7,11 +7,18 @@ import ngen.rtl.NttPipeline
 class NttPipelineSpec extends AnyFunSuite:
   val base=Seq("-n","4","-k","1","-r","1","-q","97","-root","auto","-psi","auto",
     "-architecture","streamed","-reduction","montgomery","-protocol","ready-valid")
-  test("native interface owns all arithmetic partitions and output registration"):
-    Cli.parse(base ++ Seq("-multiplier-pipeline-stages","3","-reduction-pipeline-stages","5","-output-register","ntt")) match
+  test("native interface owns all arithmetic partitions and input/output registration"):
+    Cli.parse(base ++ Seq("-multiplier-pipeline-stages","3","-reduction-pipeline-stages","5","-output-register","-input-register","ntt")) match
       case Command.Generate(c) =>
-        assert(c.pipeline == NttPipeline(Some(3),Some(5),true))
+        assert(c.pipeline == NttPipeline(Some(3),Some(5),true,true))
         assert(c.pipeline.butterflyLatency(7)==10)
+      case _ => fail("expected generation")
+  test("native bank arbitration remains a distinct NTT interface choice"):
+    Cli.parse(base ++ Seq("-bank-write-arbitration","onehot","-input-register","-issue-register","ntt")) match
+      case Command.Generate(c) =>
+        assert(c.pipeline.bankWriteArbitration=="onehot")
+        assert(c.pipeline.inputRegister)
+        assert(c.pipeline.issueRegister)
       case _ => fail("expected generation")
   test("default width-aware arithmetic latency is preserved"):
     assert(NttPipeline().butterflyLatency(17)==7)

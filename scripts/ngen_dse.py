@@ -26,7 +26,7 @@ CHOICES = dict(direction=('forward','inverse'), ring=('cyclic','negacyclic'),
 def normalize(spec):
     """Use actual sizes/counts; concrete backend legality is decided by NGen."""
     required = {'schema','transform_size','streaming_width','modulus'}
-    allowed = required | set(DEFAULTS) | {'pe_count','multiplier_pipeline_stages','reduction_pipeline_stages','output_register','frame_overlap'}
+    allowed = required | set(DEFAULTS) | {'pe_count','multiplier_pipeline_stages','reduction_pipeline_stages','output_register','input_register','issue_register','frame_overlap','bank_write_arbitration'}
     if not isinstance(spec,dict) or set(spec)-allowed or required-set(spec):
         raise ValueError('expected schema, transform_size, streaming_width, modulus and documented optional fields')
     if spec['schema'] != SCHEMA:
@@ -44,7 +44,9 @@ def normalize(spec):
     for name,values in [('multiplier_pipeline_stages',(1,3)),('reduction_pipeline_stages',(3,4,5))]:
         if name in c and (type(c[name]) is not int or c[name] not in values):
             raise ValueError('unsupported '+name)
-    for name in ('output_register','frame_overlap'):
+    if 'bank_write_arbitration' in c and c['bank_write_arbitration'] not in ('priority','onehot'):
+        raise ValueError('bank_write_arbitration must be priority or onehot')
+    for name in ('output_register','input_register','issue_register','frame_overlap'):
         if name in c and type(c[name]) is not bool:
             raise ValueError(name+' must be a Boolean')
     for name,values in CHOICES.items():
@@ -79,9 +81,12 @@ def arguments(c):
                       ('input_order','-input-order'),('output_order','-output-order'),
                       ('pe_count','-pe'),('stage_groups','-stage-groups'),
                       ('multiplier_pipeline_stages','-multiplier-pipeline-stages'),
-                      ('reduction_pipeline_stages','-reduction-pipeline-stages')]:
+                      ('reduction_pipeline_stages','-reduction-pipeline-stages'),
+                      ('bank_write_arbitration','-bank-write-arbitration')]:
         if name in c:result += [flag,str(c[name])]
     if c.get('frame_overlap',False):result += ['-frame-overlap']
+    if c.get('input_register',False):result += ['-input-register']
+    if c.get('issue_register',False):result += ['-issue-register']
     if c.get('output_register',False):result += ['-output-register']
     if c['interface']!='raw':result += ['-interface',c['interface']]
     return result

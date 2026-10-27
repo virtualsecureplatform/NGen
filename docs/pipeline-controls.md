@@ -1,8 +1,8 @@
 # Configurable NTT pipelines
 
 NTT pipeline choices belong to NGen. Both the native CLI and the JSON DSE
-adapter expose arithmetic partitioning and core output registration. An external
-search framework selects these options; it does not insert registers into the
+adapter expose arithmetic partitioning, core input/output registration, memory
+issue registration, and bank-write arbitration. An external search framework selects these options; it does not insert registers into the
 emitted RTL itself.
 
 ## Supported controls
@@ -11,6 +11,9 @@ emitted RTL itself.
 | --- | --- | --- | --- |
 | `multiplier_pipeline_stages` | `-multiplier-pipeline-stages` | 1, 3 | Stages in the main twiddle-product multiplier: one direct product, or four partial products followed by two registered accumulation stages. |
 | `reduction_pipeline_stages` | `-reduction-pipeline-stages` | 3, 4, 5 | Montgomery correction/reduction partition described below. |
+| `issue_register` | `-issue-register` to enable | false, true | Force a register after decoded bank-read selection; automatic registration of large schedules remains enabled. |
+| `input_register` | `-input-register` to enable | false, true | One elastic input beat register; the source must honor ready on every beat. |
+| `bank_write_arbitration` | `-bank-write-arbitration` | priority, onehot | Priority write selection or parallel masked selection for statically disjoint bank writers. |
 | `output_register` | `-output-register` to enable | false, true | One elastic beat register at the NTT core output, holding validity and data under stalls. |
 
 The initial supported scope is **custom complete radix-2 streamed/compact
@@ -37,11 +40,14 @@ They do not guarantee improved routed frequency or end-to-end throughput.
 
 ## Defaults and latency
 
-Omitting all three options preserves existing generated RTL. Defaults are:
+Omitting these options preserves existing generated RTL. Defaults are:
 
 - Main-product stages: 1 for field widths up to 32 bits, 3 for wider fields.
 - Reduction stages: 4.
-- Core output register: disabled.
+- Core input/output registers: disabled.
+- Bank-write arbitration: priority.
+- Memory issue register: automatic for schedules with at least 1024 bundles;
+  `issue_register: true` forces it for smaller schedules.
 
 The radix-2 butterfly latency is `2 + multiplier stages + reduction stages`:
 one input/preparation stage, the selected arithmetic stages, and one butterfly
@@ -84,8 +90,8 @@ bash ngen.bat -n 4 -k 2 -r 1 -q 97 -root auto -psi auto \
 ```
 
 `butterflypipeline` also accepts the two arithmetic-stage options with explicit
-Montgomery reduction, for standalone testing. It does not accept the core output
-register or runtime-field option with pipeline overrides.
+Montgomery reduction, for standalone testing. It does not accept core input/output or memory-issue
+registers, bank-write arbitration overrides, or the runtime-field option with pipeline overrides.
 
 ## Use the DSE JSON interface
 
@@ -98,7 +104,7 @@ python3 scripts/ngen_dse.py generate --spec examples/dse/ntt512-pipelined.json \
   --output-dir build/my-pipelined-candidate
 ```
 
-Sweep the three fields independently within their supported values. Request
+Sweep these fields independently within their supported values. Request
 normalization, candidate identity, and artifact recording include these fields.
 `capabilities` advertises their values, constraints, and defaults under
 `generic.pipeline_controls`.
@@ -109,6 +115,10 @@ Native `ngen-design-v1` metadata reports the resolved values under
 - `multiplier_pipeline_stages`
 - `reduction_pipeline_stages`
 - `output_register` (0 or 1)
+- `input_register` (0 or 1)
+- `issue_register` (0 or 1, requested override)
+- `registered_memory_issue_groups` (count of groups actually using issue registers)
+- `onehot_bank_writes` (0 or 1)
 - `butterfly_pipeline_latency`
 
 The top-level `latency` and `initiation_interval` remain declared core contracts.
@@ -126,6 +136,7 @@ sbt test assembly
 python3 -m unittest discover -s tests/python
 python3 scripts/test_pipelined_butterfly.py
 python3 scripts/test_configurable_pipeline.py
+python3 scripts/test_bank_write_arbitration.py
 ```
 
 The butterfly tests check independent modular arithmetic, consecutive tagged
@@ -139,3 +150,28 @@ remain in use for the original arithmetic configuration.
 Frame overlap is a separate NTT-level choice. See [frame overlap](frame-overlap.md)
 for the stage-parallel/full-throughput mode; the configurable Montgomery PE
 arithmetic partitions above do not yet apply to that spatial backend.
+
+## Bank-write and ingress timing controls
+
+`onehot` combines independently masked write addresses and data in parallel.
+NGen checks that every scheduled bundle writes distinct banks. Capture and
+execution use separate frame buffers. This option targets the priority mux
+chain at high PE counts; it leaves the arithmetic pipeline and cycle schedule
+unchanged. Routed timing and resource use must still be measured.
+
+`input_register` adds one cycle to no-stall core latency and can combine with
+the output register. It accepts and retains a beat until the core is ready, so
+integrators must honor `in_ready` throughout a frame, including mid-frame stalls.
+Neither option changes the conservative declared initiation interval.
+
+`issue_register` registers decoded memory-read enables, addresses, and matching
+operation controls before BRAM access. It adds one cycle per execution stage
+drain, rather than one per issued butterfly. Schedule metrics include this
+latency; grouped engines apply the choice independently. This separates schedule
+ROM/decode logic from BRAM address timing. The default retains automatic
+registration for schedules with at least 1024 bundles.
+
+The [L16/PE8 timing example](../examples/dse/ntt512-l16-timing.json) combines
+input registration, onehot bank writes, and registered memory issue with default
+arithmetic partitions. It specifies a single NTT core; full-product timing and
+resources must be qualified in the integration harness used by the search.

@@ -1,0 +1,19 @@
+{
+  "schema": "ngen-dse-design-v1",
+  "transform_size": 512,
+  "streaming_width": 16,
+  "modulus": "65537",
+  "ring": "negacyclic",
+  "direction": "forward",
+  "architecture": "streamed",
+  "pe_count": 8,
+  "radix": 2,
+  "stage_groups": 1,
+  "reduction": "montgomery",
+  "profile": "baseline",
+  "protocol": "ready-valid",
+  "transpose": "indexed",
+  "input_register": true,
+  "issue_register": true,
+  "bank_write_arbitration": "onehot"
+}

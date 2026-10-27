@@ -36,13 +36,15 @@ class DirectDSETests(unittest.TestCase):
 
     def test_pipeline_controls_are_typed_and_forwarded(self):
         c=dse.normalize({**self.design,'multiplier_pipeline_stages':3,
-                         'reduction_pipeline_stages':5,'output_register':True})
+                         'reduction_pipeline_stages':5,'output_register':True,'input_register':True,'bank_write_arbitration':'onehot'})
         args=dse.arguments(c)
         self.assertEqual(args[args.index('-multiplier-pipeline-stages')+1],'3')
         self.assertEqual(args[args.index('-reduction-pipeline-stages')+1],'5')
         self.assertIn('-output-register',args)
+        self.assertIn('-input-register',args)
+        self.assertEqual(args[args.index('-bank-write-arbitration')+1],'onehot')
         for change in ({'multiplier_pipeline_stages':2},{'multiplier_pipeline_stages':True},
-                       {'reduction_pipeline_stages':0},{'output_register':1}):
+                       {'reduction_pipeline_stages':0},{'output_register':1},{'input_register':1},{'bank_write_arbitration':'invalid'}):
             with self.assertRaises(ValueError):dse.normalize({**self.design,**change})
 
     def test_frame_overlap_is_boolean_and_forwarded(self):
@@ -110,11 +112,12 @@ class DirectDSETests(unittest.TestCase):
             self.assertTrue((root/'out/candidate.sv').is_file())
             self.assertEqual(generated,json.loads((root/'out/result.json').read_text()))
             pipelined={**self.design,'multiplier_pipeline_stages':3,
-                       'reduction_pipeline_stages':5,'output_register':True}
+                       'reduction_pipeline_stages':5,'output_register':True,'input_register':True,'issue_register':True}
             request.write_text(json.dumps(pipelined))
             configured=cli('plan')
             self.assertEqual(configured['metadata']['architecture_parameters']['butterfly_pipeline_latency'],10)
             self.assertEqual(configured['metadata']['architecture_parameters']['output_register'],1)
+            self.assertEqual(configured['metadata']['architecture_parameters']['input_register'],1)
             changed=copy.deepcopy(self.design);changed['pe_count']=2
             request.write_text(json.dumps(changed))
             self.assertNotEqual(planned['candidate_id'],cli('plan')['candidate_id'])

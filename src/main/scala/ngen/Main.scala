@@ -434,19 +434,27 @@ object Main:
             architectureParameters ++= Map(
               "multiplier_pipeline_stages" -> config.pipeline.multiplier(config.domain.modulus.bitWidth),
               "reduction_pipeline_stages" -> config.pipeline.reduction,
-              "output_register" -> (if config.pipeline.outputRegister then 1 else 0))
+              "output_register" -> (if config.pipeline.outputRegister then 1 else 0),
+              "issue_register" -> (if config.pipeline.issueRegister then 1 else 0),
+              "input_register" -> (if config.pipeline.inputRegister then 1 else 0),
+              "onehot_bank_writes" -> (if config.pipeline.bankWriteArbitration == "onehot" then 1 else 0))
           val useAxi=config.interfaceKind==InterfaceKind.Axi4Stream
-          val coreTop = if useSwitchTranspose || useAxi || config.pipeline.outputRegister then s"${top}Core" else top
+          val coreTop = if useSwitchTranspose || useAxi || config.pipeline.outputRegister || config.pipeline.inputRegister then s"${top}Core" else top
           val coreRtl = if config.stageGroups > 1 then
             require(basePlan.isInstanceOf[NttPlan], "stage groups require a complete transform")
             architectureParameters ++= Map("stage_groups" -> config.stageGroups, "pe_count_total" -> (metrics.peCount * config.stageGroups), "coefficient_buffers" -> (2 * config.stageGroups))
             ngen.backend.PartitionedNttSystemVerilog.emit(basePlan.asInstanceOf[NttPlan],config.streamingWidth,requestedPeCount,config.stageGroups,coreTop,config.profile,peReductionKind,config.pipeline)
           else PeStreamingNttSystemVerilog.emit(schedule, config.streamingWidth, coreTop, config.profile, peReductionKind, config.protocol, config.runtimeControl,config.pipeline)
+          val ingressTop = if config.pipeline.inputRegister then
+            (if config.pipeline.outputRegister then s"${top}Ingress" else top) else coreTop
+          val ingressRtl = if config.pipeline.inputRegister then
+            ngen.backend.ElasticInputSystemVerilog.emit(coreRtl,ingressTop,coreTop,config.streamingWidth,config.domain.modulus.bitWidth)
+            else coreRtl
           Files.writeString(output,
             if useSwitchTranspose then GenericSwitchTransposeWrapper.emit(coreRtl, top, coreTop, config.streamingWidth, config.domain.modulus.bitWidth, config.domain.size)
             else if useAxi then Axi4StreamWrapper.emit(coreRtl,top,coreTop,config.streamingWidth,config.domain.modulus.bitWidth,metrics.inputCycles)
-            else if config.pipeline.outputRegister then ngen.backend.ElasticOutputSystemVerilog.emit(coreRtl,top,coreTop,config.streamingWidth,config.domain.modulus.bitWidth)
-            else coreRtl)
+            else if config.pipeline.outputRegister then ngen.backend.ElasticOutputSystemVerilog.emit(ingressRtl,top,ingressTop,config.streamingWidth,config.domain.modulus.bitWidth)
+            else ingressRtl)
           val controlPorts = config.protocol match
             case StreamProtocol.NextPulse => Vector(Port("next", PortDirection.Input, ValueFormat.Valid), Port("ready", PortDirection.Output, ValueFormat.Valid), Port("next_out", PortDirection.Output, ValueFormat.Valid))
             case StreamProtocol.ReadyValid => Vector(Port("in_valid", PortDirection.Input, ValueFormat.Valid), Port("in_ready", PortDirection.Output, ValueFormat.Valid), Port("out_valid", PortDirection.Output, ValueFormat.Valid), Port("out_ready", PortDirection.Input, ValueFormat.Valid))
@@ -463,7 +471,7 @@ object Main:
           val coreLatency = partitionMetrics.map(_.latency).sum +
             (config.stageGroups - 1) * (metrics.inputCycles - 1)
           architectureParameters ++= Map(
-            "registered_memory_issue_groups" -> partitionSchedules.count(PeStreamingNttSystemVerilog.registeredIssue),
+            "registered_memory_issue_groups" -> partitionSchedules.count(s => PeStreamingNttSystemVerilog.registeredIssue(s,config.pipeline)),
             "block_control_rom_groups" -> partitionSchedules.count(part => PeStreamingNttSystemVerilog.usesBlockControl(part,config.runtimeControl))
           )
           Architecture(
@@ -473,7 +481,7 @@ object Main:
             Vector(ngen.rtl.MemorySpec("coefficient_buffers", metrics.bankDepth, ValueFormat.unsigned(config.domain.modulus.bitWidth), banks = 2 * config.stageGroups * metrics.bankCount, readLatency = 1)),
             Vector(ngen.rtl.CounterSpec("capture", metrics.inputCycles), ngen.rtl.CounterSpec("bundle", math.max(1, metrics.bundleCount)), ngen.rtl.CounterSpec("output", metrics.outputCycles)),
             StreamingContract(config.domain.size, config.streamingWidth, metrics.inputCycles, metrics.outputCycles,
-              coreLatency + switchLatency + (if config.pipeline.outputRegister then 1 else 0),
+              coreLatency + switchLatency + (if config.pipeline.outputRegister then 1 else 0) + (if config.pipeline.inputRegister then 1 else 0),
               if rectangularSwitch then coreLatency + switchLatency
               else partitionMetrics.map(_.initiationInterval).max),
             peReductionKind, profile

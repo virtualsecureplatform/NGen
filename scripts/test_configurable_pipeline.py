@@ -77,16 +77,18 @@ def main():
         rng=random.Random(42)
         frames=[[rng.randrange(97) for _ in range(16)] for _ in range(3)]
         timings={}
-        for m,r,registered,inverse,groups in itertools.product((1,3),(3,4,5),(False,True),(False,True),(1,2)):
+        for m,r,registered,inverse,groups,input_registered in itertools.product((1,3),(3,4,5),(False,True),(False,True),(1,2),(False,True)):
             args=['bash',str(ROOT/'ngen.bat'),'-n','4','-k','2','-r','1','-q','97','-root','8','-psi','28',
                   '-architecture','streamed','-pe','2','-stage-groups',str(groups),'-protocol','ready-valid',
                   '-reduction','montgomery','-multiplier-pipeline-stages',str(m),'-reduction-pipeline-stages',str(r)]
             if registered:args+=['-output-register']
+            if input_registered:args+=['-input-register']
             rtl=folder/'core.sv';tb=folder/'test.sv';sim=folder/'sim'
             subprocess.run([*args,'-o',str(rtl),'intt' if inverse else 'ntt'],check=True,stdout=subprocess.DEVNULL)
             metadata=json.loads(rtl.with_suffix('.json').read_text())
             params=metadata['architecture_parameters']
             assert params['butterfly_pipeline_latency']==2+m+r
+            assert params['input_register']==int(input_registered)
             expected=[transform(domain,frame,inverse) for frame in frames]
             for stalls in (False,True):
                 tb.write_text(bench(frames,expected,4,7,stalls,stalls))
@@ -95,11 +97,11 @@ def main():
                 if not stalls:
                     match=re.search(r'latency=(\d+) interval=(\d+)',result.stdout)
                     latency,interval=map(int,match.groups())
-                    timings[m,r,registered,inverse,groups]=(latency,metadata['latency'])
+                    timings[m,r,registered,inverse,groups,input_registered]=(latency,metadata['latency'])
                 count+=1
         # Independently measured changes must match declared changes, including the elastic register.
-        for (m,r,registered,inverse,groups),(measured,declared) in timings.items():
-            ref_measured,ref_declared=timings[1,4,False,inverse,groups]
+        for (m,r,registered,inverse,groups,input_registered),(measured,declared) in timings.items():
+            ref_measured,ref_declared=timings[1,4,False,inverse,groups,False]
             assert measured-ref_measured==declared-ref_declared,((m,r,registered,inverse,groups),measured,declared,ref_measured,ref_declared)
         print(f'PASS {count} core simulations: forward/inverse, groups, arithmetic partitions, stalls, reset, metadata latency deltas')
 

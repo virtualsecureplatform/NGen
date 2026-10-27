@@ -17,7 +17,9 @@ object PeStreamingNttSystemVerilog:
       radix: Int
   )
 
-  def registeredIssue(schedule: PeNttSchedule): Boolean = schedule.radix == 2 && schedule.bundles.size >= 1024
+  def registeredIssue(schedule: PeNttSchedule): Boolean = registeredIssue(schedule,NttPipeline())
+
+  def registeredIssue(schedule: PeNttSchedule, pipeline: NttPipeline): Boolean = schedule.radix == 2 && (pipeline.issueRegister || schedule.bundles.size >= 1024)
 
   def usesBlockControl(schedule: PeNttSchedule, runtimeControl: Boolean = false): Boolean = registeredIssue(schedule) && !runtimeControl
 
@@ -26,7 +28,7 @@ object PeStreamingNttSystemVerilog:
     val gap = if profile == ProfileName.F300 then 1 else 0
     val stageCount = schedule.bundles.map(_.stage).distinct.size
     val executionCycles =
-      if schedule.radix == 2 then 1 + schedule.bundles.size + (PipelinedButterflySystemVerilog.latency(reduction, schedule.plan.domain.modulus.bitWidth,pipeline) + 2 + (if registeredIssue(schedule) then 1 else 0)) * stageCount
+      if schedule.radix == 2 then 1 + schedule.bundles.size + (PipelinedButterflySystemVerilog.latency(reduction, schedule.plan.domain.modulus.bitWidth,pipeline) + 2 + (if registeredIssue(schedule,pipeline) then 1 else 0)) * stageCount
       else 1 + (3 + schedule.radixLog) * schedule.bundles.size + math.max(0, schedule.bundles.size - 1) * gap
     val latency = streamCycles + executionCycles + (if schedule.radix == 2 then 3 else 2)
     // Worst frame-admission interval with continuously ready output. Each banked
@@ -124,20 +126,32 @@ object PeStreamingNttSystemVerilog:
       Vector.tabulate(streamingWidth)(lane => s"input [${width - 1}:0] i$lane") ++
       Vector.tabulate(streamingWidth)(lane => s"output reg [${width - 1}:0] o$lane")
     val rowWidth = math.max(1, 32 - Integer.numberOfLeadingZeros(mapping.depth - 1))
+    val oneHotWrites = pipeline.bankWriteArbitration == "onehot"
+    if oneHotWrites then
+      require(radix == 2 && !runtimeControl, "onehot bank writes require static radix-2 control")
+      schedule.bundles.foreach { bundle =>
+        val banks=bundle.operations.flatMap(_.outputs.map(a=>mapping.bank(a.address)))
+        require(banks.distinct.size==banks.size,"onehot writes require disjoint scheduled output banks")
+      }
     def memoryName(buffer: Int, bank: Int): String = s"buffer_${buffer}_bank_$bank"
     def portName(buffer: Int, bank: Int, suffix: String): String = s"buffer_${buffer}_bank_${bank}_$suffix"
     val memories = (for buffer <- 0 until 2; bank <- 0 until mapping.bankCount yield
+      if oneHotWrites then
+        s"(* ram_style = \"block\" *) reg [${width - 1}:0] ${memoryName(buffer,bank)} [0:BANK_DEPTH-1];reg ${portName(buffer,bank,"read_enable")};wire ${portName(buffer,bank,"write_enable")};reg [${rowWidth - 1}:0] ${portName(buffer,bank,"read_address")};wire [${rowWidth - 1}:0] ${portName(buffer,bank,"write_address")};reg [${width - 1}:0] ${portName(buffer,bank,"read_data")};wire [${width - 1}:0] ${portName(buffer,bank,"write_data")};"
+      else
       s"(* ram_style = \"block\" *) reg [${width - 1}:0] ${memoryName(buffer,bank)} [0:BANK_DEPTH-1];reg ${portName(buffer,bank,"read_enable")},${portName(buffer,bank,"write_enable")};reg [${rowWidth - 1}:0] ${portName(buffer,bank,"read_address")},${portName(buffer,bank,"write_address")};reg [${width - 1}:0] ${portName(buffer,bank,"read_data")},${portName(buffer,bank,"write_data")};").mkString("\n  ")
     val memoryPorts = (for buffer <- 0 until 2; bank <- 0 until mapping.bankCount yield
       s"if(${portName(buffer,bank,"read_enable")})${portName(buffer,bank,"read_data")}<=${memoryName(buffer,bank)}[${portName(buffer,bank,"read_address")}];if(${portName(buffer,bank,"write_enable")})${memoryName(buffer,bank)}[${portName(buffer,bank,"write_address")}]<=${portName(buffer,bank,"write_data")};").mkString("\n      ")
     val portDefaults = (for buffer <- 0 until 2; bank <- 0 until mapping.bankCount yield
+      if oneHotWrites then s"${portName(buffer,bank,"read_enable")}=0;${portName(buffer,bank,"read_address")}=0;"
+      else
       s"${portName(buffer,bank,"read_enable")}=0;${portName(buffer,bank,"write_enable")}=0;${portName(buffer,bank,"read_address")}=0;${portName(buffer,bank,"write_address")}=0;${portName(buffer,bank,"write_data")}=0;").mkString(" ")
     def readPort(buffer: Int, address: Int): String =
       val bank = mapping.bank(address)
       s"${portName(buffer,bank,"read_enable")}=1;${portName(buffer,bank,"read_address")}=${rowWidth}'d${mapping.row(address)};"
     def writePort(buffer: Int, address: Int, value: String): String =
       val bank = mapping.bank(address)
-      s"${portName(buffer,bank,"write_enable")}=1;${portName(buffer,bank,"write_address")}=${rowWidth}'d${mapping.row(address)};${portName(buffer,bank,"write_data")}=$value;"
+      if oneHotWrites then "" else s"${portName(buffer,bank,"write_enable")}=1;${portName(buffer,bank,"write_address")}=${rowWidth}'d${mapping.row(address)};${portName(buffer,bank,"write_data")}=$value;"
     def selectedReadPort(address: Int): String = s"if(exec_buffer)begin ${readPort(1,address)} end else begin ${readPort(0,address)} end"
     def selectedReadData(target: String, address: Int): String =
       val bank = mapping.bank(address)
@@ -182,7 +196,7 @@ object PeStreamingNttSystemVerilog:
           val cases = (0 until mapping.bankCount).map { bank =>
             def action(buffer: Int): String =
               if valuesOnly then s"o$lane<=${portName(buffer,bank,"read_data")};"
-              else if write then s"${portName(buffer,bank,"write_enable")}=1;${portName(buffer,bank,"write_address")}=$rowExpression;${portName(buffer,bank,"write_data")}=i$lane;"
+              else if write then if oneHotWrites then "" else s"${portName(buffer,bank,"write_enable")}=1;${portName(buffer,bank,"write_address")}=$rowExpression;${portName(buffer,bank,"write_data")}=i$lane;"
               else s"${portName(buffer,bank,"read_enable")}=1;${portName(buffer,bank,"read_address")}=$rowExpression;"
             s"$bank:begin if($bufferSelector)begin ${action(1)} end else begin ${action(0)} end end"
           }.mkString(" ")
@@ -394,10 +408,36 @@ object PeStreamingNttSystemVerilog:
           (0 until maxButterflySteps).map(step => s"pe_${pe}_step_c_$step<=step_constant_${pe}_$step;pe_${pe}_step_p_$step<=step_precon_${pe}_$step;") ++ (0 until radix).map(output=>s"pe_${pe}_post_c_$output<=post_constant_${pe}_$output;pe_${pe}_post_p_$output<=post_precon_${pe}_$output;")
       inputLoads ++ controls
     }.mkString(" ")
-    val dynamicWritePorts = (for pe <- 0 until peCount; output <- 0 until radix yield
+    val dynamicWritePorts = if oneHotWrites then "" else (for pe <- 0 until peCount; output <- 0 until radix yield
       s"if(${retirePrefix}output_valid_${pe}_${output})begin ${bankCase(s"${retirePrefix}output_bank_${pe}_${output}") { bank =>
         s"if(exec_buffer)begin ${portName(1,bank,"write_enable")}=1;${portName(1,bank,"write_address")}=${retirePrefix}output_row_${pe}_${output};${portName(1,bank,"write_data")}=pe_out_${pe}_$output;end else begin ${portName(0,bank,"write_enable")}=1;${portName(0,bank,"write_address")}=${retirePrefix}output_row_${pe}_${output};${portName(0,bank,"write_data")}=pe_out_${pe}_$output;end"
       }} end").mkString(" ")
+    val oneHotWriteNetwork = if oneHotWrites then
+      val ioBanks=Vector.tabulate(streamingWidth) { lane =>
+        val addresses=Vector.tabulate(streamCycles)(cycle=>plan.inputAddresses(cycle*streamingWidth+lane))
+        val bank=AffineAddressExpression.emit(addresses.map(mapping.bank),"bank_capture_index",bankWidth)
+          .getOrElse(throw new IllegalArgumentException("onehot input bank map must be affine"))
+        val row=AffineAddressExpression.emit(addresses.map(mapping.row),"bank_capture_index",rowWidth)
+          .getOrElse(throw new IllegalArgumentException("onehot input row map must be affine"))
+        (bank,row)
+      }
+      val first=if protocol==StreamProtocol.NextPulse then "next&&ready" else "in_valid&&in_ready"
+      val continuing=if protocol==StreamProtocol.NextPulse then "1'b1" else "in_valid"
+      val header=s"wire bank_capture_fire=capture_active?($continuing):($first);wire bank_capture_buffer=capture_active?capture_buffer:(buffer_0_state==EMPTY?1'b0:1'b1);wire [31:0] bank_capture_index=capture_active?capture_count:0;"
+      val terms=(for buffer <- 0 until 2; bank <- 0 until mapping.bankCount yield
+        val capture=(0 until streamingWidth).map { lane =>
+          val (b,r)=ioBanks(lane)
+          (s"(bank_capture_fire && bank_capture_buffer==1'b$buffer && ($b)==${bankWidth}'d$bank)",r,s"i$lane")
+        }
+        val retire=(for pe <- 0 until peCount; output <- 0 until radix yield
+          (s"(retire_fire && exec_buffer==1'b$buffer && retire_output_valid_${pe}_${output} && retire_output_bank_${pe}_${output}==${bankWidth}'d$bank)",
+            s"retire_output_row_${pe}_${output}",s"pe_out_${pe}_$output"))
+        val writers=capture++retire
+        def masked(bits:Int,index:Int):String=writers.map { t => s"({$bits{${t._1}}} & (${if index==1 then t._2 else t._3}))" }.mkString(" | ")
+        s"assign ${portName(buffer,bank,"write_enable")}=${writers.map(_._1).mkString(" | ")};assign ${portName(buffer,bank,"write_address")}=${masked(rowWidth,1)};assign ${portName(buffer,bank,"write_data")}=${masked(width,2)};"
+      ).mkString("\n")
+      header+"\n"+terms
+    else ""
     val pipelineDefinition = if radix == 2 then PipelinedButterflySystemVerilog.emit(field,reduction,"NGenInternalPipelinedButterfly",pipeline=pipeline) else ""
     val pipelineRetire = if radix == 2 then "pe_pipeline_valid_0" else "pe_fused_valid_0"
     val writePhase = 3
@@ -407,7 +447,7 @@ object PeStreamingNttSystemVerilog:
     val pipelineControllerDeclarations = if radix == 2 then
       s"reg issued_valid,launch_valid,draining,all_issued;integer inflight_count;wire issue_fire=exec_active&&!draining;wire retire_fire;wire issue_last_stage=$issueLastStage;"
     else ""
-    val registerIssue = registeredIssue(schedule)
+    val registerIssue = registeredIssue(schedule,pipeline)
     val readRegisters = (for buffer <- 0 until 2; bank <- 0 until mapping.bankCount yield
       s"reg issue_${portName(buffer,bank,"read_enable")};reg [${rowWidth-1}:0] issue_${portName(buffer,bank,"read_address")};").mkString
     val readRegisterDefaults = (for buffer <- 0 until 2; bank <- 0 until mapping.bankCount yield
@@ -502,7 +542,7 @@ object PeStreamingNttSystemVerilog:
        |  $peDeclarations${if registerIssue then s"\n  $issueRegisters" else ""}
        |  ${if radix == 2 then "assign retire_fire=pe_pipeline_valid_0;" else ""}
        |  $romDeclarations${if registerIssue then s"\n  $registeredIssueLogic" else ""}
-       |  $readyAssignment
+       |  $readyAssignment${if oneHotWrites then "\n"+oneHotWriteNetwork else ""}
        |  function automatic [${width - 1}:0] mod_add(input [${width - 1}:0] a,input [${width - 1}:0] b);reg [$width:0] sum,reduced;begin sum={1'b0,a}+{1'b0,b};if(sum>=MODULUS_EXT)reduced=sum-MODULUS_EXT;else reduced=sum;mod_add=reduced[${width - 1}:0];end endfunction
        |  function automatic [${width - 1}:0] mod_sub(input [${width - 1}:0] a,input [${width - 1}:0] b);reg [$width:0] difference;begin if(a>=b)difference={1'b0,a}-{1'b0,b};else difference={1'b0,a}+MODULUS_EXT-{1'b0,b};mod_sub=difference[${width - 1}:0];end endfunction
        |  function automatic [$width:0] lazy_add(input [$width:0] a,input [${width - 1}:0] b);reg [${width + 1}:0] value,double_modulus;begin double_modulus={1'b0,MODULUS_EXT}<<1;value={1'b0,a}+b;if(value>=double_modulus)value=value-{1'b0,MODULUS_EXT};lazy_add=value[$width:0];end endfunction

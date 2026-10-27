@@ -99,6 +99,9 @@ object Cli:
       |  -multiplier-pipeline-stages <1|3> Montgomery product arithmetic partition.
       |  -reduction-pipeline-stages <3|4|5> Montgomery reduction arithmetic partition.
       |  -frame-overlap Overlap frames in custom stage-parallel ready-valid cores.
+      |  -issue-register                Register decoded bank-read addresses and controls.
+      |  -bank-write-arbitration <priority|onehot> Bank write-port selection (custom Montgomery).
+      |  -input-register Add one elastic core input stage (custom ready-valid Montgomery).
       |  -output-register Add one elastic core output stage (custom ready-valid Montgomery).
       |  -pe <count>     Reusable butterfly PE count; defaults to max(1, K/2).
       |  -q <prime>      Field modulus for a custom domain (decimal or 0x hexadecimal).
@@ -186,6 +189,9 @@ object Cli:
     var r: Option[Int] = None
     var multiplierStages: Option[Int] = None
     var reductionStages: Option[Int] = None
+    var bankWriteArbitration = "priority"
+    var inputRegister = false
+    var issueRegister = false
     var outputRegister = false
     var frameOverlap = false
     var stageGroups = 1
@@ -235,6 +241,9 @@ object Cli:
         case "-r" => r = Some(requiredValue(args, "-r").toInt)
         case "-multiplier-pipeline-stages" => multiplierStages = Some(requiredValue(args,"-multiplier-pipeline-stages").toInt)
         case "-reduction-pipeline-stages" => reductionStages = Some(requiredValue(args,"-reduction-pipeline-stages").toInt)
+        case "-bank-write-arbitration" => bankWriteArbitration = requiredValue(args,"-bank-write-arbitration")
+        case "-input-register" => inputRegister = true
+        case "-issue-register" => issueRegister = true
         case "-output-register" => outputRegister = true
         case "-frame-overlap" => frameOverlap = true
         case "-pe" => peCount = Some(requiredValue(args, "-pe").toInt)
@@ -280,7 +289,7 @@ object Cli:
         case unknown => throw new IllegalArgumentException(s"unknown argument: $unknown")
 
     require(!frameOverlap || terminal.exists(Set("ntt","intt")), "frame overlap is supported only for custom ntt/intt")
-    val pipeline = NttPipeline(multiplierStages,reductionStages,outputRegister)
+    val pipeline = NttPipeline(multiplierStages,reductionStages,outputRegister,inputRegister,bankWriteArbitration,issueRegister)
     require(!pipeline.configured || terminal.exists(Set("ntt","intt","butterflypipeline")),
       "pipeline controls are supported only for custom ntt/intt or Montgomery butterflypipeline")
     terminal match
@@ -307,8 +316,8 @@ object Cli:
         require(preset.isEmpty && n.isEmpty && root.isEmpty && psi.isEmpty && baseCase.isEmpty && peCount.isEmpty,
           "butterflypipeline uses -q and -reduction")
         require(reduction != ReductionChoice.Auto, "butterflypipeline requires -reduction barrett, montgomery, or shoup")
-        require(!pipeline.configured || (reduction == ReductionChoice.Montgomery && !runtimeField && !outputRegister),
-          "butterflypipeline controls require Montgomery, no runtime field, and no core output register")
+        require(!pipeline.configured || (reduction == ReductionChoice.Montgomery && !runtimeField && !outputRegister && !inputRegister && !issueRegister && bankWriteArbitration == "priority"),
+          "butterflypipeline controls require Montgomery, no runtime field, and no core boundary registers or bank arbitration override")
         Command.ButterflyPipeline(Modulus(q.getOrElse(throw new IllegalArgumentException("butterflypipeline requires -q"))), reduction, runtimeField, output, top, pipeline)
       case Some("rnspolymul") =>
         val logSize = n.getOrElse(throw new IllegalArgumentException("rnspolymul requires -n"))
